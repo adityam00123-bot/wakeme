@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { UserCheck, X } from 'lucide-react';
 import { UserProfile } from '../types/wakeme';
 
@@ -12,6 +12,13 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ user, isOpen, onClose, onSaveUser }) => {
   const [name, setName] = useState(user.name);
   const [contact, setContact] = useState(user.contact);
+
+  useEffect(() => {
+    if (isOpen) {
+      setName(user.name);
+      setContact(user.contact);
+    }
+  }, [isOpen, user.name, user.contact]);
 
   if (!isOpen) return null;
 

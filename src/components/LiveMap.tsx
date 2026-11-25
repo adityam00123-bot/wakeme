@@ -113,6 +113,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const estMarkerRef = useRef<Marker | null>(null);
   const lastFittedKeyRef = useRef<string>('');
   const appliedThemeRef = useRef<'light' | 'dark'>(theme);
+  const styleReadyRef = useRef(false);
+  const loadedOnceRef = useRef(false);
   const centerCrosshairRef = useRef(centerCrosshairMode);
   centerCrosshairRef.current = centerCrosshairMode;
   const onClickRef = useRef(onMapClick);
@@ -148,7 +150,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   };
 
   const syncGeoJsonLayers = (map: MapLibreMap) => {
-    if (!map.isStyleLoaded()) return;
+    if (!styleReadyRef.current && !map.getStyle()?.layers) return;
     const p = latestPropsRef.current;
     const accentColor = p.isAlerting
       ? '#dc2626'
@@ -287,18 +289,22 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       style: getStyleUrl(theme),
       center: [centerLng, centerLat],
       zoom,
+      cooperativeGestures: !interactivePinMode,
       attributionControl: false,
     });
 
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 
     map.on('style.load', () => {
+      styleReadyRef.current = true;
+      loadedOnceRef.current = true;
       syncGeoJsonLayers(map);
     });
 
     map.on('error', () => {
-      if (!map.isStyleLoaded()) {
+      if (!styleReadyRef.current && !loadedOnceRef.current) {
         try {
+          styleReadyRef.current = false;
           map.setStyle({
             version: 8,
             sources: {},
@@ -359,6 +365,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     const map = mapRef.current;
     if (!map || appliedThemeRef.current === theme) return;
     appliedThemeRef.current = theme;
+    styleReadyRef.current = false;
     map.setStyle(getStyleUrl(theme));
   }, [theme]);
 

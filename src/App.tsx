@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { App as CapApp } from '@capacitor/app';
+import { Capacitor, SystemBars, SystemBarsStyle } from '@capacitor/core';
 import {
   Compass,
   Home,
@@ -27,7 +29,11 @@ import {
   haversineDistanceKm,
   interpolateStations,
 } from './services/geoEngine';
-import { isGeoAvailable, watchPositionUnified } from './services/nativeGeo';
+import {
+  getCurrentPositionUnified,
+  isGeoAvailable,
+  watchPositionUnified,
+} from './services/nativeGeo';
 import {
   DEFAULT_PREFERENCES,
   loadDestinations,
@@ -70,6 +76,8 @@ export function App() {
   const activeJourneyRef = useRef<JourneyRecord | null>(null);
   const liveStateRef = useRef<LiveTrackingState | null>(null);
   const userRef = useRef<UserProfile>(user);
+  const tabRef = useRef<TabKey>(tab);
+  const authModalOpenRef = useRef<boolean>(authModalOpen);
   const gpsWatchCleanupRef = useRef<(() => void) | null>(null);
   const gpsSessionTokenRef = useRef(0);
   const simWaypointsRef = useRef<RouteWaypoint[]>([]);
@@ -77,6 +85,8 @@ export function App() {
   const snoozeUntilRef = useRef<number>(0);
   const routeBaselineSpeedRef = useRef<number>(58);
   const testAlarmTimerRef = useRef<number | null>(null);
+  const recalibrateTimerRef = useRef<number | null>(null);
+  const lastTickMsRef = useRef<number>(Date.now());
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<{
     prompt: () => Promise<void>;
     userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
@@ -99,14 +109,47 @@ export function App() {
   activeJourneyRef.current = activeJourney;
   liveStateRef.current = liveState;
   userRef.current = user;
+  tabRef.current = tab;
+  authModalOpenRef.current = authModalOpen;
 
-  // Apply Light / Dark theme class & meta theme-color
+  // Handle Android hardware / gesture Back button cleanly in APK
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const listenerPromise = CapApp.addListener('backButton', ({ canGoBack }) => {
+      if (activeJourneyRef.current?.journey_status === 'alerting') {
+        return; // Require alarm snooze/dismiss slide rather than accidental Back exit
+      }
+      if (authModalOpenRef.current) {
+        setAuthModalOpen(false);
+        return;
+      }
+      if (tabRef.current !== 'home') {
+        setTab('home');
+        return;
+      }
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void CapApp.minimizeApp();
+      }
+    });
+    return () => {
+      void listenerPromise.then((handle) => handle.remove());
+    };
+  }, []);
+
+  // Apply Light / Dark theme class, meta theme-color, & native SystemBars style
   useEffect(() => {
     const isDark = user.preferences.theme === 'dark';
     document.documentElement.classList.toggle('dark', isDark);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) {
       meta.setAttribute('content', isDark ? '#0A0D12' : '#F5F7FA');
+    }
+    if (Capacitor.isNativePlatform()) {
+      void SystemBars.setStyle({
+        style: isDark ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+      }).catch(() => {});
     }
   }, [user.preferences.theme]);
 
@@ -214,6 +257,10 @@ export function App() {
     if (gpsWatchCleanupRef.current) {
       gpsWatchCleanupRef.current();
       gpsWatchCleanupRef.current = null;
+    }
+    if (recalibrateTimerRef.current !== null) {
+      clearTimeout(recalibrateTimerRef.current);
+      recalibrateTimerRef.current = null;
     }
   }, []);
 
@@ -352,7 +399,11 @@ export function App() {
         `Signal restored! Auto-recalibrated from est. to exact ${exactDist.toFixed(2)} km${driftMsg}`
       );
 
-      window.setTimeout(() => {
+      if (recalibrateTimerRef.current !== null) {
+        clearTimeout(recalibrateTimerRef.current);
+      }
+      recalibrateTimerRef.current = window.setTimeout(() => {
+        recalibrateTimerRef.current = null;
         setLiveState((prev) =>
           prev
             ? {
@@ -385,15 +436,14 @@ export function App() {
     snoozeUntilRef.current = 0;
     prevGpsFixRef.current = null;
 
-    setDestinations((prev) => {
-      const next = prev.map((d) =>
-        d.destination_id === config.destination.destination_id
-          ? { ...d, last_used_at: new Date().toISOString() }
-          : d
-      );
-      saveDestinations(next);
-      return next;
-    });
+    const updatedDestinations = destinations.map((d) =>
+      d.destination_id === config.destination.destination_id
+        ? { ...d, last_used_at: new Date().toISOString() }
+        : d
+    );
+    setDestinations(updatedDestinations);
+    saveDestinations(updatedDestinations);
+    lastTickMsRef.current = Date.now();
 
     const preset = MUMBAI_PRESET_ROUTES.find((r) => r.id === config.routeId);
     const resolvedWaypoints =
@@ -522,6 +572,10 @@ export function App() {
           const lng = pos.longitude;
           const nowMs = Date.now();
           const accuracy = pos.accuracy || 15;
+          const maxAcceptedAccuracy = Math.max(800, curJ.configured_alert_distance * 400);
+          if (accuracy > maxAcceptedAccuracy) {
+            return;
+          }
 
           // Compute speed from hardware sensor OR haversine displacement delta
           let measuredSpeedKmh = curL.speedKmh;
@@ -529,6 +583,7 @@ export function App() {
           if (typeof pos.speed === 'number' && pos.speed >= 0.4) {
             measuredSpeedKmh = pos.speed * 3.6;
             spdSrc = 'gps_sensor';
+            prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
           } else if (prevGpsFixRef.current) {
             const dtHours = (nowMs - prevGpsFixRef.current.timeMs) / 3_600_000;
             if (dtHours > 0.00055) {
@@ -656,8 +711,27 @@ export function App() {
       }
     };
     const onOnline = () => {
+      const j = activeJourneyRef.current;
       const l = liveStateRef.current;
-      if (activeJourneyRef.current?.journey_status === 'active' && l?.deadReckoningActive) {
+      if (!j || j.journey_status !== 'active' || !l?.deadReckoningActive) return;
+      if (j.mode === 'live_gps' && isGeoAvailable()) {
+        void getCurrentPositionUnified(5000)
+          .then((pos) => {
+            handleRestoreSignal({
+              lat: pos.latitude,
+              lng: pos.longitude,
+              speedKmh:
+                typeof pos.speed === 'number' && pos.speed >= 0.4
+                  ? pos.speed * 3.6
+                  : l.speedKmh,
+              accuracyMeters: pos.accuracy || l.accuracyMeters,
+              headingDeg: pos.heading ?? l.headingDeg,
+            });
+          })
+          .catch(() => {
+            // Stay in Dead Reckoning until real GPS fix restores
+          });
+      } else {
         handleRestoreSignal();
       }
     };
@@ -671,6 +745,10 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      const nowMs = Date.now();
+      const dtRealSec = Math.min(10, Math.max(0.5, (nowMs - lastTickMsRef.current) / 1000));
+      lastTickMsRef.current = nowMs;
+
       const j = activeJourneyRef.current;
       const l = liveStateRef.current;
       if (!j || !l || j.journey_status !== 'active') return;
@@ -688,10 +766,10 @@ export function App() {
           MUMBAI_PRESET_ROUTES.find((r) => r.id === j.route_id)?.avgSpeedKmh ||
           routeBaselineSpeedRef.current;
 
-        // Subtle realistic speed variance while underground so restore demonstrates genuine recalibration
         const actualSpeedKmh = l.deadReckoningActive ? baseSpeedKmh * 0.92 : baseSpeedKmh;
-        const kmPerRealSec = (actualSpeedKmh / 3600) * l.simSpeedMultiplier;
-        const nextProgress = Math.min(1, l.simProgress + kmPerRealSec / totalCorridorKm);
+        const dtSimSec = l.simSpeedMultiplier * dtRealSec;
+        const kmPerTick = (actualSpeedKmh / 3600) * dtSimSec;
+        const nextProgress = Math.min(1, l.simProgress + kmPerTick / totalCorridorKm);
 
         const pos = interpolateStations(wps, nextProgress);
         const snap = computeRouteProgress(wps, pos.lat, pos.lng, j.configured_alert_distance);
@@ -703,16 +781,18 @@ export function App() {
         }
 
         if (l.deadReckoningActive && l.drRemainingSec !== null) {
-          const dtSimSec = l.simSpeedMultiplier;
+          const totalEst = Math.max(1, l.drTotalEstimatedSec || l.drRemainingSec);
           const nextRemaining = Math.max(0, l.drRemainingSec - dtSimSec);
-          const estSpeed = l.drSnapshotSpeedKmh || baseSpeedKmh;
-          const estDeltaKm = (estSpeed / 3600) * dtSimSec;
-          const nextEstDist = Math.max(
-            0,
-            (l.drEstimatedDistanceKm ?? l.distanceKm) - estDeltaKm
+          const fractionLeft = nextRemaining / totalEst;
+          const snapStartDist = l.drSnapshotDistanceKm ?? l.distanceKm;
+          const targetAlertDist = Math.min(snapStartDist, j.configured_alert_distance);
+          const nextEstDist = Number(
+            (targetAlertDist + Math.max(0, snapStartDist - targetAlertDist) * fractionLeft).toFixed(2)
           );
-          const prevDrProg = l.drProgress0to1 ?? l.simProgress;
-          const nextDrProg = Math.min(1, prevDrProg + estDeltaKm / totalCorridorKm);
+          const nextDrProg = Math.min(
+            1,
+            Math.max(0, 1 - nextEstDist / totalCorridorKm)
+          );
           const drPos = interpolateStations(wps, nextDrProg);
           const drSnap = computeRouteProgress(wps, drPos.lat, drPos.lng, j.configured_alert_distance);
 
@@ -730,7 +810,7 @@ export function App() {
                   drEstimatedDistanceKm: nextEstDist,
                   nextStationName: drSnap.nextStationName,
                   remainingStopsCount: drSnap.remainingStopsCount,
-                  drRemainingSec: nextRemaining,
+                  drRemainingSec: Math.round(nextRemaining),
                   staticBaselineChecks: nextStaticChecks,
                 }
               : prev
@@ -768,7 +848,7 @@ export function App() {
           fireTriggerAlarm('gps_proximity', trueDist);
         }
       } else {
-        // Real GPS mode watchdog & Dead-Reckoning kinematics
+        // Real GPS mode watchdog & wall-clock Dead-Reckoning kinematics
         if (
           !l.deadReckoningActive &&
           l.lastGpsFixAt &&
@@ -778,18 +858,35 @@ export function App() {
           return;
         }
 
+        if (!l.deadReckoningActive) {
+          // Track 3s static baseline checks so battery saving % in live_gps mode stays accurate
+          setLiveState((prev) =>
+            prev ? { ...prev, staticBaselineChecks: prev.staticBaselineChecks + 1 } : prev
+          );
+          return;
+        }
+
         if (l.deadReckoningActive && l.drRemainingSec !== null) {
-          const nextRemaining = Math.max(0, l.drRemainingSec - 1);
-          const estSpeed = l.drSnapshotSpeedKmh || routeBaselineSpeedRef.current;
-          const estDeltaKm = estSpeed / 3600;
-          const nextEstDist = Math.max(
-            0,
-            (l.drEstimatedDistanceKm ?? l.distanceKm) - estDeltaKm
+          const totalEst = Math.max(1, l.drTotalEstimatedSec || l.drRemainingSec);
+          const nextRemaining = Math.max(0, l.drRemainingSec - dtRealSec);
+          const fractionLeft = nextRemaining / totalEst;
+          const snapStartDist = l.drSnapshotDistanceKm ?? l.distanceKm;
+          const targetAlertDist = Math.min(snapStartDist, j.configured_alert_distance);
+          const nextEstDist = Number(
+            (targetAlertDist + Math.max(0, snapStartDist - targetAlertDist) * fractionLeft).toFixed(2)
           );
           const totalCorridorKm = Math.max(2, l.totalRouteKm);
-          const prevDrProg = l.drProgress0to1 ?? l.simProgress;
-          const nextDrProg = Math.min(1, prevDrProg + estDeltaKm / totalCorridorKm);
+          const nextDrProg = Math.min(
+            1,
+            Math.max(0, 1 - nextEstDist / totalCorridorKm)
+          );
           const drPos = interpolateStations(simWaypointsRef.current, nextDrProg);
+          const drSnap = computeRouteProgress(
+            simWaypointsRef.current,
+            drPos.lat,
+            drPos.lng,
+            j.configured_alert_distance
+          );
 
           setLiveState((prev) =>
             prev
@@ -799,7 +896,9 @@ export function App() {
                   drEstimatedLat: drPos.lat,
                   drEstimatedLng: drPos.lng,
                   drEstimatedDistanceKm: nextEstDist,
-                  drRemainingSec: nextRemaining,
+                  nextStationName: drSnap.nextStationName,
+                  remainingStopsCount: drSnap.remainingStopsCount,
+                  drRemainingSec: Math.round(nextRemaining),
                   staticBaselineChecks: nextStaticChecks,
                 }
               : prev
@@ -887,6 +986,16 @@ export function App() {
       const actualDist = snap.routeRemainingKm;
       const z = getPollingZoneInfo(actualDist);
 
+      const drEstSec = l.deadReckoningActive
+        ? computeDeadReckoningEtaSec(
+            actualDist,
+            j.configured_alert_distance,
+            l.drSnapshotSpeedKmh || l.speedKmh,
+            snap.remainingStopsCount,
+            userRef.current.preferences.stopBufferMinutesPerStop
+          )
+        : null;
+
       setLiveState((prev) =>
         prev
           ? {
@@ -900,6 +1009,18 @@ export function App() {
               nextStationName: snap.nextStationName,
               remainingStopsCount: snap.remainingStopsCount,
               simSpeedMultiplier: 8,
+              ...(prev.deadReckoningActive
+                ? {
+                    drSnapshotDistanceKm: actualDist,
+                    drEstimatedDistanceKm: actualDist,
+                    drEstimatedLat: pos.lat,
+                    drEstimatedLng: pos.lng,
+                    drProgress0to1: targetProgress,
+                    drStopsBufferCount: snap.remainingStopsCount,
+                    drRemainingSec: drEstSec,
+                    drTotalEstimatedSec: drEstSec,
+                  }
+                : {}),
             }
           : prev
       );
@@ -951,8 +1072,8 @@ export function App() {
   return (
     <div className="min-h-dvh w-full bg-[#f5f7fa] text-slate-900 transition-colors duration-150 dark:bg-[#0a0d12] dark:text-slate-100">
       <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-[#f5f7fa] md:border-x md:border-slate-200/80 md:shadow-xl dark:bg-[#0a0d12] dark:md:border-white/[0.08]">
-        {/* Clean Mobile Header (Brand + Quick Theme Toggle + Profile) */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200/80 bg-[#f5f7fa]/92 px-4 py-3 backdrop-blur-xl dark:border-white/[0.07] dark:bg-[#0a0d12]/92">
+        {/* Clean Mobile Header (Brand + Quick Theme Toggle + Profile + Safe Top Bar) */}
+        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200/80 bg-[#f5f7fa]/92 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl dark:border-white/[0.07] dark:bg-[#0a0d12]/92">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm dark:bg-blue-500">
               <Navigation className="h-4 w-4" />
@@ -1045,16 +1166,20 @@ export function App() {
                 handleStopAndSaveJourney('cancelled');
               }}
               onPauseResume={() => {
-                setActiveJourney((prev) => {
-                  if (!prev) return prev;
-                  const nextStatus = prev.journey_status === 'paused' ? 'active' : 'paused';
-                  if (nextStatus === 'paused') {
-                    alertEngine.stopKeepAlive();
-                  } else {
-                    alertEngine.startKeepAlive(prev.destination_name);
-                  }
-                  return { ...prev, journey_status: nextStatus };
-                });
+                const cur = activeJourneyRef.current;
+                if (!cur) return;
+                const nextStatus = cur.journey_status === 'paused' ? 'active' : 'paused';
+                if (nextStatus === 'paused') {
+                  void alertEngine.releaseWakeLock();
+                } else {
+                  lastTickMsRef.current = Date.now();
+                  alertEngine.startKeepAlive(cur.destination_name);
+                  void alertEngine.acquireWakeLock();
+                  setLiveState((l) => (l ? { ...l, lastGpsFixAt: Date.now() } : l));
+                }
+                setActiveJourney((prev) =>
+                  prev ? { ...prev, journey_status: nextStatus } : prev
+                );
               }}
               onStopJourney={() => handleStopAndSaveJourney('cancelled')}
               onSimulateSignalDrop={() => handleSimulateSignalDrop('manual_demo')}
@@ -1072,11 +1197,28 @@ export function App() {
                     : liveState?.distanceKm ?? 1.2
                 );
               }}
-              onUpdateAlertRadius={(km) =>
+              onUpdateAlertRadius={(km) => {
                 setActiveJourney((prev) =>
                   prev ? { ...prev, configured_alert_distance: km } : prev
-                )
-              }
+                );
+                setLiveState((prev) => {
+                  if (!prev || !prev.deadReckoningActive) return prev;
+                  const curEstDist = prev.drEstimatedDistanceKm ?? prev.distanceKm;
+                  const nextSec = computeDeadReckoningEtaSec(
+                    curEstDist,
+                    km,
+                    prev.drSnapshotSpeedKmh || prev.speedKmh,
+                    prev.drStopsBufferCount,
+                    userRef.current.preferences.stopBufferMinutesPerStop
+                  );
+                  return {
+                    ...prev,
+                    drSnapshotDistanceKm: curEstDist,
+                    drRemainingSec: nextSec,
+                    drTotalEstimatedSec: nextSec,
+                  };
+                });
+              }}
             />
           )}
 

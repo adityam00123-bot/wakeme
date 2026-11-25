@@ -125,7 +125,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <div className="mt-3.5 flex flex-wrap gap-2">
             {quickPins.map((dest) => {
               const Icon = getCategoryIcon(dest.category);
-              const shortName = dest.destination_name.split(' ')[0];
+              const cleaned = dest.destination_name.replace(/\s*\(.*?\)\s*/g, '').replace(/\s+(Station|Junction)$/i, '').trim();
+              const shortName = cleaned.length > 15 ? cleaned.slice(0, 14).trim() + '…' : cleaned;
               return (
                 <button
                   key={dest.destination_id}

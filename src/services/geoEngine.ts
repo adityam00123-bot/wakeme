@@ -553,14 +553,14 @@ export async function searchPlacesHybrid(query: string): Promise<SearchPlaceResu
   const q = query.trim().toLowerCase();
   if (!q) return [];
 
-  // 1. Instant offline station & city lookup (Long-Distance + Mumbai Local)
+  // 1. Instant offline station & city lookup (Long-Distance + Mumbai Local trunk)
   const localMatches: SearchPlaceResult[] = MUMBAI_STATIONS.filter(
     (st) =>
       st.name.toLowerCase().includes(q) ||
       st.code.toLowerCase().includes(q) ||
       st.line.toLowerCase().includes(q)
   )
-    .slice(0, 8)
+    .slice(0, 18)
     .map((st) => ({
       id: st.id,
       name: st.name,

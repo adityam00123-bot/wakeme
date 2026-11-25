@@ -21,17 +21,19 @@ export const AlarmOverlay: React.FC<AlarmOverlayProps> = ({
   onDismiss,
 }) => {
   const [slideVal, setSlideVal] = useState(0);
+  const validSlideStartRef = React.useRef(false);
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!validSlideStartRef.current) return;
     const val = Number(e.target.value);
     setSlideVal(val);
-    if (val >= 90) {
+    if (val >= 88) {
       onDismiss();
     }
   };
 
   return (
-    <div className="animate-alarm-flash fixed inset-0 z-[9999] flex flex-col justify-between p-6 text-white backdrop-blur-md">
+    <div className="animate-alarm-flash fixed inset-0 z-[9999] flex flex-col justify-between px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))] text-white backdrop-blur-md">
       <div className="flex flex-col items-center pt-4 text-center">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-white/25 bg-black/40 px-4 py-1.5 text-xs font-semibold text-amber-200">
           <Radio className="h-3.5 w-3.5 animate-pulse" />
@@ -101,12 +103,19 @@ export const AlarmOverlay: React.FC<AlarmOverlayProps> = ({
             min={0}
             max={100}
             value={slideVal}
-            onChange={handleSliderChange}
-            onMouseUp={() => {
-              if (slideVal < 90) setSlideVal(0);
+            onPointerDown={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = (e.clientX - rect.left) / Math.max(1, rect.width);
+              validSlideStartRef.current = ratio <= 0.35;
             }}
-            onTouchEnd={() => {
-              if (slideVal < 90) setSlideVal(0);
+            onChange={handleSliderChange}
+            onPointerUp={() => {
+              validSlideStartRef.current = false;
+              if (slideVal < 88) setSlideVal(0);
+            }}
+            onPointerCancel={() => {
+              validSlideStartRef.current = false;
+              setSlideVal(0);
             }}
             aria-label="Slide right to stop alarm"
             className="relative z-10 h-full w-full cursor-pointer opacity-0"

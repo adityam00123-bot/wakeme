@@ -62,9 +62,13 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   const [locatingMe, setLocatingMe] = useState(false);
   const lastAnchoredCoordsRef = useRef<{ lat: number; lng: number }>({ lat: 18.5289, lng: 73.8744 });
   const reverseTimerRef = useRef<number | null>(null);
+  const searchReqIdRef = useRef(0);
+  const reverseReqIdRef = useRef(0);
+  const [geoErrMsg, setGeoErrMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const trimmed = query.trim();
+    const reqId = ++searchReqIdRef.current;
     if (!trimmed) {
       const defaults: SearchPlaceResult[] = MUMBAI_STATIONS.filter((s) => s.isMajor).map((s) => ({
         id: s.id,
@@ -83,6 +87,7 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
     const timer = window.setTimeout(async () => {
       setSearching(true);
       const found = await searchPlacesHybrid(trimmed);
+      if (searchReqIdRef.current !== reqId) return;
       setResults(found);
       setSearching(false);
     }, 280);
@@ -134,12 +139,14 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
     }
     lastAnchoredCoordsRef.current = { lat: newLat, lng: newLng };
 
+    const reqId = ++reverseReqIdRef.current;
     setResolvingPlace(true);
     if (reverseTimerRef.current !== null) {
       clearTimeout(reverseTimerRef.current);
     }
     reverseTimerRef.current = window.setTimeout(async () => {
       const resolved = await reverseGeocodeHybrid(newLat, newLng);
+      if (reverseReqIdRef.current !== reqId) return;
       setName(resolved.name);
       setSubtitle(resolved.subtitle);
       setResolvingPlace(false);
@@ -147,16 +154,33 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   };
 
   const handleLocateMe = () => {
-    if (!isGeoAvailable()) return;
+    if (!isGeoAvailable()) {
+      setGeoErrMsg('GPS unavailable on this device');
+      return;
+    }
     setLocatingMe(true);
+    setGeoErrMsg(null);
     void getCurrentPositionUnified(6000)
-      .then((pos) => {
-        lastAnchoredCoordsRef.current = { lat: 0, lng: 0 };
+      .then(async (pos) => {
+        if (reverseTimerRef.current !== null) {
+          clearTimeout(reverseTimerRef.current);
+          reverseTimerRef.current = null;
+        }
+        lastAnchoredCoordsRef.current = { lat: pos.latitude, lng: pos.longitude };
         setLat(pos.latitude);
         setLng(pos.longitude);
         setLocatingMe(false);
+        const reqId = ++reverseReqIdRef.current;
+        setResolvingPlace(true);
+        const resolved = await reverseGeocodeHybrid(pos.latitude, pos.longitude);
+        if (reverseReqIdRef.current === reqId) {
+          setName(resolved.name);
+          setSubtitle(resolved.subtitle);
+          setResolvingPlace(false);
+        }
       })
-      .catch(() => {
+      .catch((err: { message?: string }) => {
+        setGeoErrMsg(err?.message || 'Unable to lock GPS location');
         setLocatingMe(false);
       });
   };
@@ -371,6 +395,12 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
           )}
         </button>
       </header>
+
+      {geoErrMsg && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+          {geoErrMsg}
+        </p>
+      )}
 
       {/* Spacious Map Canvas with Center Crosshair Pin Overlay */}
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 shadow-sm dark:border-white/[0.08]">

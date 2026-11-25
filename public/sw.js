@@ -1,4 +1,6 @@
 const CACHE_NAME = 'wakeme-v2';
+const TILE_CACHE = 'wakeme-map-tiles-v2';
+const VALID_CACHES = new Set([CACHE_NAME, TILE_CACHE]);
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -18,7 +20,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => !VALID_CACHES.has(k)).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -61,7 +63,13 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => caches.match(request).then((r) => r || caches.match('/index.html')))
+        .catch(() =>
+          caches.match(request).then((r) => {
+            if (r) return r;
+            if (request.mode === 'navigate') return caches.match('/index.html');
+            return Response.error();
+          })
+        )
     );
   }
 });

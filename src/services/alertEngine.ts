@@ -75,9 +75,13 @@ class WakeMeAlertEngine {
   private alarmAudioEl: HTMLAudioElement | null = null;
   private pulseTimer: number | null = null;
   private repeatTimer: number | null = null;
+  private speechDelayTimer: number | null = null;
+  private duckTimer: number | null = null;
   private wakeLockSentinel: WakeLockSentinel | null = null;
   private keepAliveActive = false;
   private active = false;
+  private audioElementsPrimed = false;
+  private channelCreated = false;
   private nativeNotifPermission: NotificationPermission = 'default';
   private silentWavUrl: string | null = null;
   private alarmWavUrl: string | null = null;
@@ -89,6 +93,35 @@ class WakeMeAlertEngine {
           void this.acquireWakeLock();
         }
       });
+    }
+    if (Capacitor.isNativePlatform()) {
+      void this.syncNativePermissionStatus();
+    }
+  }
+
+  private async syncNativePermissionStatus(): Promise<void> {
+    try {
+      const cur = await LocalNotifications.checkPermissions();
+      this.nativeNotifPermission = cur.display === 'granted' ? 'granted' : cur.display === 'denied' ? 'denied' : 'default';
+    } catch {
+      // Ignore
+    }
+  }
+
+  private async ensureAlarmChannel(): Promise<void> {
+    if (!Capacitor.isNativePlatform() || this.channelCreated) return;
+    try {
+      await LocalNotifications.createChannel({
+        id: 'wakeme-alarms',
+        name: 'Destination Alarms',
+        description: 'High-priority arrival & Dead-Reckoning wake alerts',
+        importance: 5,
+        visibility: 1,
+        vibration: true,
+      });
+      this.channelCreated = true;
+    } catch {
+      // Ignore
     }
   }
 
@@ -130,6 +163,22 @@ class WakeMeAlertEngine {
         }
       }
       this.ensureAudioElements();
+      if (!this.audioElementsPrimed && this.alarmAudioEl) {
+        this.audioElementsPrimed = true;
+        const el = this.alarmAudioEl;
+        el.muted = true;
+        void el
+          .play()
+          .then(() => {
+            el.pause();
+            el.currentTime = 0;
+            el.muted = false;
+          })
+          .catch(() => {
+            el.muted = false;
+            this.audioElementsPrimed = false;
+          });
+      }
     } catch {
       // AudioContext unavailable
     }
@@ -199,6 +248,7 @@ class WakeMeAlertEngine {
   public async requestNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
     if (Capacitor.isNativePlatform()) {
       try {
+        await this.ensureAlarmChannel();
         const cur = await LocalNotifications.checkPermissions();
         if (cur.display === 'granted') {
           this.nativeNotifPermission = 'granted';
@@ -250,7 +300,14 @@ class WakeMeAlertEngine {
   public speakAlert(destinationName: string, distanceKm: number, lang: AlertLanguage, isFallback: boolean): void {
     if (!('speechSynthesis' in window)) return;
     try {
-      window.speechSynthesis.cancel();
+      if (this.speechDelayTimer !== null) {
+        clearTimeout(this.speechDelayTimer);
+        this.speechDelayTimer = null;
+      }
+      const needsCancel = window.speechSynthesis.speaking || window.speechSynthesis.pending;
+      if (needsCancel) {
+        window.speechSynthesis.cancel();
+      }
       const distText = distanceKm.toFixed(1);
       let text = '';
 
@@ -268,12 +325,34 @@ class WakeMeAlertEngine {
           : `WakeMe Alert! You are approaching ${destinationName}. ${distText} kilometers remaining. Please wake up!`;
       }
 
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = lang === 'hi' ? 'hi-IN' : lang === 'mr' ? 'mr-IN' : 'en-IN';
-      utter.rate = 0.96;
-      utter.pitch = 1.05;
-      utter.volume = 1.0;
-      window.speechSynthesis.speak(utter);
+      const doSpeak = () => {
+        try {
+          if (this.alarmAudioEl && !this.alarmAudioEl.paused) {
+            const origVol = this.alarmAudioEl.volume;
+            this.alarmAudioEl.volume = Math.min(origVol, 0.25);
+            if (this.duckTimer !== null) clearTimeout(this.duckTimer);
+            this.duckTimer = window.setTimeout(() => {
+              if (this.alarmAudioEl && this.active) {
+                this.alarmAudioEl.volume = origVol;
+              }
+            }, 3500);
+          }
+          const utter = new SpeechSynthesisUtterance(text);
+          utter.lang = lang === 'hi' ? 'hi-IN' : lang === 'mr' ? 'mr-IN' : 'en-IN';
+          utter.rate = 0.96;
+          utter.pitch = 1.05;
+          utter.volume = 1.0;
+          window.speechSynthesis.speak(utter);
+        } catch {
+          // Speech unsupported
+        }
+      };
+
+      if (needsCancel) {
+        this.speechDelayTimer = window.setTimeout(doSpeak, 50);
+      } else {
+        doSpeak();
+      }
     } catch {
       // Speech unsupported
     }
@@ -281,16 +360,18 @@ class WakeMeAlertEngine {
 
   public sendSystemNotification(title: string, body: string): void {
     if (Capacitor.isNativePlatform()) {
-      void LocalNotifications.schedule({
-        notifications: [
-          {
-            id: 1001,
-            title,
-            body,
-            schedule: { at: new Date(Date.now() + 120) },
-          },
-        ],
-      }).catch(() => {});
+      void this.ensureAlarmChannel().then(() =>
+        LocalNotifications.schedule({
+          notifications: [
+            {
+              id: 1001,
+              title,
+              body,
+              channelId: 'wakeme-alarms',
+            },
+          ],
+        })
+      ).catch(() => {});
       return;
     }
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -410,7 +491,10 @@ class WakeMeAlertEngine {
         Capacitor.isNativePlatform() || (typeof navigator !== 'undefined' && 'geolocation' in navigator),
       wakeLockSupported: typeof navigator !== 'undefined' && 'wakeLock' in navigator,
       mediaSessionSupported: typeof navigator !== 'undefined' && 'mediaSession' in navigator,
-      speechSynthesisSupported: typeof window !== 'undefined' && 'speechSynthesis' in window,
+      speechSynthesisSupported:
+        typeof window !== 'undefined' &&
+        'speechSynthesis' in window &&
+        (!Capacitor.isNativePlatform() || voicesCount > 0),
       voicesCount,
       notificationPermission: Capacitor.isNativePlatform()
         ? this.nativeNotifPermission
@@ -437,6 +521,14 @@ class WakeMeAlertEngine {
     if (this.repeatTimer !== null) {
       clearInterval(this.repeatTimer);
       this.repeatTimer = null;
+    }
+    if (this.speechDelayTimer !== null) {
+      clearTimeout(this.speechDelayTimer);
+      this.speechDelayTimer = null;
+    }
+    if (this.duckTimer !== null) {
+      clearTimeout(this.duckTimer);
+      this.duckTimer = null;
     }
     if ('vibrate' in navigator) {
       try {

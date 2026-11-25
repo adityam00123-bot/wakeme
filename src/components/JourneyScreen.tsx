@@ -155,12 +155,11 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
       setCustomDestOverride(null);
       setCustomStartOverride(null);
       setDestId(selectedDestination.destination_id);
-      const isLong =
-        selectedDestination.line === 'Express' || selectedDestination.line === 'Bus';
-      setAlertRadiusKm(isLong ? 5.0 : 2.0);
+      setAlertRadiusKm(preferences.defaultAlertRadiusKm);
       setShowAllPreviewStops(false);
     }
-  }, [selectedDestination, selectedPresetRoute, destinations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDestination, selectedPresetRoute]);
 
   // Passive non-blocking GPS lookup when Live GPS mode is selected
   useEffect(() => {
@@ -382,29 +381,36 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           )
         : 90;
 
-    const statusBadge = isDR
-      ? {
-          cls: 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/20 dark:text-amber-200',
-          label: 'Estimated',
-          pulse: 'bg-amber-500',
-        }
-      : liveState.connectionHealth === 'RECALIBRATED'
-      ? {
-          cls: 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/40 dark:bg-emerald-500/20 dark:text-emerald-200',
-          label: 'Re-locked',
-          pulse: 'bg-emerald-500',
-        }
-      : activeJourney.mode === 'live_gps'
-      ? {
-          cls: 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/40 dark:bg-emerald-500/20 dark:text-emerald-200',
-          label: 'Live GPS',
-          pulse: 'bg-emerald-500',
-        }
-      : {
-          cls: 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-400/40 dark:bg-blue-500/20 dark:text-blue-200',
-          label: 'Simulator',
-          pulse: 'bg-blue-500',
-        };
+    const statusBadge =
+      activeJourney.journey_status === 'paused'
+        ? {
+            cls: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-white/15 dark:bg-[#1c2331] dark:text-slate-300',
+            label: 'Paused',
+            pulse: 'bg-slate-400',
+          }
+        : isDR
+        ? {
+            cls: 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/20 dark:text-amber-200',
+            label: 'Estimated',
+            pulse: 'bg-amber-500',
+          }
+        : liveState.connectionHealth === 'RECALIBRATED'
+        ? {
+            cls: 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/40 dark:bg-emerald-500/20 dark:text-emerald-200',
+            label: 'Re-locked',
+            pulse: 'bg-emerald-500',
+          }
+        : activeJourney.mode === 'live_gps'
+        ? {
+            cls: 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/40 dark:bg-emerald-500/20 dark:text-emerald-200',
+            label: 'Live GPS',
+            pulse: 'bg-emerald-500',
+          }
+        : {
+            cls: 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-400/40 dark:bg-blue-500/20 dark:text-blue-200',
+            label: 'Simulator',
+            pulse: 'bg-blue-500',
+          };
 
     const zoneText =
       liveState.pollingZone === 'ZONE_1_ECO'
@@ -579,7 +585,9 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                 <>
                   <p className="font-mono-num mt-0.5 text-xl font-extrabold text-blue-600 dark:text-blue-400">
                     {liveState.etaMinutes !== null
-                      ? formatDurationCompact(liveState.etaMinutes * 60)
+                      ? liveState.etaMinutes >= 60
+                        ? `${Math.floor(liveState.etaMinutes / 60)}h ${liveState.etaMinutes % 60}m`
+                        : `${liveState.etaMinutes}m`
                       : '--'}
                   </p>
                   <p className="mt-0.5 text-[10px] text-slate-400">
@@ -964,7 +972,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
 
       {/* Quick Corridor Chips (1-Tap Load Popular Routes) */}
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-0.5">
-        {MUMBAI_PRESET_ROUTES.slice(0, 7).map((route) => {
+        {MUMBAI_PRESET_ROUTES.map((route) => {
           const shortTitle = route.title.split('(')[0].trim();
           const selected = activePresetId === route.id;
           return (

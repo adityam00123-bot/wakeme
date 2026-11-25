@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
   Activity,
   BatteryCharging,
@@ -115,6 +116,14 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
   const [showTelemetry, setShowTelemetry] = useState(true);
   const [showSupabase, setShowSupabase] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const testTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (testTimerRef.current !== null) clearTimeout(testTimerRef.current);
+    };
+  }, []);
 
   const diag = useMemo(() => {
     void diagVersion;
@@ -138,13 +147,13 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
     const notif = await alertEngine.requestNotificationPermission();
     let geoNote = 'GPS Checked';
     if (diag.geolocationSupported) {
-      void getCurrentPositionUnified(3500)
-        .then(() => {
-          setDiagVersion((v) => v + 1);
-        })
-        .catch(() => {
-          setDiagVersion((v) => v + 1);
-        });
+      try {
+        await getCurrentPositionUnified(4000);
+        geoNote = 'GPS Locked';
+      } catch (err: unknown) {
+        const code = (err as { code?: number })?.code;
+        geoNote = code === 1 ? 'GPS Permission Denied' : 'GPS Standby / Indoors';
+      }
     } else {
       geoNote = 'GPS unsupported';
     }
@@ -153,6 +162,10 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
   };
 
   const handleRunTestAlarm = () => {
+    if (testTimerRef.current !== null) {
+      clearTimeout(testTimerRef.current);
+      testTimerRef.current = null;
+    }
     if (testingAlarm) {
       onStopTestAlarm();
       setTestingAlarm(false);
@@ -162,7 +175,8 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
     setTestingAlarm(true);
     onTestFullAlarm();
     setDiagVersion((v) => v + 1);
-    window.setTimeout(() => {
+    testTimerRef.current = window.setTimeout(() => {
+      testTimerRef.current = null;
       setTestingAlarm(false);
       setDiagVersion((v) => v + 1);
     }, 4600);
@@ -170,27 +184,32 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
 
   const handleExportLogs = () => {
     try {
-      const blob = new Blob(
-        [
-          JSON.stringify(
-            {
-              exportedAt: new Date().toISOString(),
-              preferences: { ...preferences, supabaseAnonKey: undefined },
-              telemetryLogs,
-              journeys,
-            },
-            null,
-            2
-          ),
-        ],
-        { type: 'application/json' }
+      const jsonStr = JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          preferences: { ...preferences, supabaseAnonKey: undefined },
+          telemetryLogs,
+          journeys,
+        },
+        null,
+        2
       );
+      if (Capacitor.isNativePlatform()) {
+        if (navigator.clipboard?.writeText) {
+          void navigator.clipboard.writeText(jsonStr).then(() => {
+            setExportNote('Telemetry JSON copied to clipboard');
+            window.setTimeout(() => setExportNote(null), 3000);
+          });
+        }
+        return;
+      }
+      const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `wakeme-telemetry-${Date.now()}.json`;
       a.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       // Ignore export issues
     }
@@ -664,6 +683,11 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
 
           {showTelemetry && (
             <div className="clean-scroll max-h-44 space-y-1.5 overflow-y-auto pr-1">
+              {exportNote && (
+                <p className="rounded-xl bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                  {exportNote}
+                </p>
+              )}
               {telemetryLogs.length === 0 ? (
                 <p className="rounded-xl bg-[#f5f7fa] p-3 text-center text-xs text-slate-500 dark:bg-[#0a0d12]">
                   Run a Demo or GPS trip to log Polling Zones, Signal Drops, and Re-locks.

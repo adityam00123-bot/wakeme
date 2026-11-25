@@ -15,25 +15,31 @@ export function isGeoAvailable(): boolean {
 
 export async function getCurrentPositionUnified(timeoutMs = 8000): Promise<UnifiedGeoFix> {
   if (Capacitor.isNativePlatform()) {
-    const perms = await Geolocation.checkPermissions();
-    if (perms.location !== 'granted' && perms.coarseLocation !== 'granted') {
-      const requested = await Geolocation.requestPermissions({ permissions: ['location', 'coarseLocation'] });
-      if (requested.location !== 'granted' && requested.coarseLocation !== 'granted') {
-        throw Object.assign(new Error('Location permission denied'), { code: 1 });
+    try {
+      const perms = await Geolocation.checkPermissions();
+      if (perms.location !== 'granted' && perms.coarseLocation !== 'granted') {
+        const requested = await Geolocation.requestPermissions({ permissions: ['location', 'coarseLocation'] });
+        if (requested.location !== 'granted' && requested.coarseLocation !== 'granted') {
+          throw Object.assign(new Error('Location permission denied'), { code: 1 });
+        }
       }
+      const pos = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: timeoutMs,
+        maximumAge: 3000,
+      });
+      return {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy ?? 15,
+        speed: pos.coords.speed ?? null,
+        heading: pos.coords.heading ?? null,
+      };
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || String(err);
+      const isDisabled = /disabled|location services|gps/i.test(msg) && !/denied|permission/i.test(msg);
+      throw Object.assign(new Error(msg), { code: isDisabled ? 2 : 1 });
     }
-    const pos = await Geolocation.getCurrentPosition({
-      enableHighAccuracy: true,
-      timeout: timeoutMs,
-      maximumAge: 3000,
-    });
-    return {
-      latitude: pos.coords.latitude,
-      longitude: pos.coords.longitude,
-      accuracy: pos.coords.accuracy ?? 15,
-      speed: pos.coords.speed ?? null,
-      heading: pos.coords.heading ?? null,
-    };
   }
 
   if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
@@ -74,7 +80,9 @@ export async function watchPositionUnified(
         }
       }
     } catch (err) {
-      onError({ code: 1, message: String(err) });
+      const msg = String(err);
+      const isDenied = /denied|permission/i.test(msg);
+      onError({ code: isDenied ? 1 : 2, message: msg });
       return () => {};
     }
 
@@ -82,7 +90,9 @@ export async function watchPositionUnified(
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 },
       (pos, err) => {
         if (err) {
-          onError({ code: 2, message: err.message });
+          const msg = err.message || '';
+          const isDenied = /denied|permission/i.test(msg);
+          onError({ code: isDenied ? 1 : 2, message: msg });
           return;
         }
         if (pos) {
