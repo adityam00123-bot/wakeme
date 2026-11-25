@@ -634,7 +634,9 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
             </h2>
             <span className="rounded-full bg-[#edf1f7] px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-[#1c2331] dark:text-slate-300">
               {routeSnap.remainingStopsCount > 0
-                ? `${routeSnap.remainingStopsCount} stops left`
+                ? `${routeSnap.remainingStopsCount} ${
+                    routeSnap.remainingStopsCount === 1 ? 'stop' : 'stops'
+                  } left`
                 : 'Final stop next'}
             </span>
           </div>

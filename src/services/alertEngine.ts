@@ -352,6 +352,35 @@ class WakeMeAlertEngine {
     }
   }
 
+  public getDiagnostics() {
+    const voicesCount =
+      typeof window !== 'undefined' && 'speechSynthesis' in window
+        ? window.speechSynthesis.getVoices().length
+        : 0;
+    return {
+      audioContextSupported:
+        typeof window !== 'undefined' &&
+        Boolean(
+          window.AudioContext ||
+            (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        ),
+      audioContextState: this.audioCtx?.state ?? 'uninitialized',
+      htmlAudioReady: Boolean(this.alarmAudioEl),
+      keepAliveActive: this.keepAliveActive,
+      isRinging: this.active,
+      vibrationSupported: typeof navigator !== 'undefined' && 'vibrate' in navigator,
+      geolocationSupported: typeof navigator !== 'undefined' && 'geolocation' in navigator,
+      wakeLockSupported: typeof navigator !== 'undefined' && 'wakeLock' in navigator,
+      mediaSessionSupported: typeof navigator !== 'undefined' && 'mediaSession' in navigator,
+      speechSynthesisSupported: typeof window !== 'undefined' && 'speechSynthesis' in window,
+      voicesCount,
+      notificationPermission:
+        typeof window !== 'undefined' && 'Notification' in window
+          ? Notification.permission
+          : ('unsupported' as const),
+    };
+  }
+
   public stopAlarm(): void {
     this.active = false;
     if (this.alarmAudioEl) {

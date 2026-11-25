@@ -17,7 +17,7 @@ import { AuthModal } from './components/AuthModal';
 import { HomeScreen } from './components/HomeScreen';
 import { JourneyScreen, StartJourneyConfig } from './components/JourneyScreen';
 import { SettingsTelemetryScreen } from './components/SettingsTelemetryScreen';
-import { MUMBAI_PRESET_ROUTES, getStationById } from './data/mumbaiLocal';
+import { DEFAULT_DESTINATIONS, MUMBAI_PRESET_ROUTES, getStationById } from './data/mumbaiLocal';
 import { alertEngine } from './services/alertEngine';
 import {
   buildRouteWaypoints,
@@ -28,6 +28,7 @@ import {
   interpolateStations,
 } from './services/geoEngine';
 import {
+  DEFAULT_PREFERENCES,
   loadDestinations,
   loadJourneys,
   loadTelemetryLogs,
@@ -73,6 +74,25 @@ export function App() {
   const prevGpsFixRef = useRef<{ lat: number; lng: number; timeMs: number } | null>(null);
   const snoozeUntilRef = useRef<number>(0);
   const routeBaselineSpeedRef = useRef<number>(58);
+  const testAlarmTimerRef = useRef<number | null>(null);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<{
+    prompt: () => Promise<void>;
+    userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+  } | null>(null);
+
+  useEffect(() => {
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(
+        e as unknown as {
+          prompt: () => Promise<void>;
+          userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+        }
+      );
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+  }, []);
 
   activeJourneyRef.current = activeJourney;
   liveStateRef.current = liveState;
@@ -880,6 +900,10 @@ export function App() {
 
   const handleTestFullAlarm = () => {
     alertEngine.unlockAudio();
+    if (testAlarmTimerRef.current !== null) {
+      clearTimeout(testAlarmTimerRef.current);
+      testAlarmTimerRef.current = null;
+    }
     const dummyDest = destinations[0];
     if (!activeJourney) {
       alertEngine.triggerAlarm({
@@ -888,11 +912,22 @@ export function App() {
         isFallback: false,
         prefs: user.preferences,
       });
-      window.setTimeout(() => alertEngine.stopAlarm(), 4500);
+      testAlarmTimerRef.current = window.setTimeout(() => {
+        alertEngine.stopAlarm();
+        testAlarmTimerRef.current = null;
+      }, 4500);
       appendLog('alert', 'Ran 4.5s sound, vibration, and voice alarm self-test');
     } else {
       fireTriggerAlarm('gps_proximity', liveState?.distanceKm || 1.2);
     }
+  };
+
+  const handleStopTestAlarm = () => {
+    if (testAlarmTimerRef.current !== null) {
+      clearTimeout(testAlarmTimerRef.current);
+      testAlarmTimerRef.current = null;
+    }
+    alertEngine.stopAlarm();
   };
 
   const navItems = [
@@ -1039,13 +1074,34 @@ export function App() {
           {tab === 'settings' && (
             <SettingsTelemetryScreen
               preferences={user.preferences}
+              savedPlacesCount={destinations.length}
               journeys={journeys}
               telemetryLogs={telemetryLogs}
+              canInstallPwa={Boolean(deferredInstallPrompt)}
+              onInstallPwa={async () => {
+                if (!deferredInstallPrompt) return;
+                await deferredInstallPrompt.prompt();
+                await deferredInstallPrompt.userChoice;
+                setDeferredInstallPrompt(null);
+              }}
               onUpdatePreferences={handleUpdatePreferences}
               onTestFullAlarm={handleTestFullAlarm}
+              onStopTestAlarm={handleStopTestAlarm}
               onClearLogs={() => {
                 setTelemetryLogs([]);
                 saveTelemetryLogs([]);
+              }}
+              onClearHistory={() => {
+                setJourneys([]);
+                saveJourneys([]);
+              }}
+              onResetDefaults={() => {
+                handleUpdatePreferences({
+                  ...DEFAULT_PREFERENCES,
+                  theme: user.preferences.theme,
+                });
+                setDestinations(DEFAULT_DESTINATIONS);
+                saveDestinations(DEFAULT_DESTINATIONS);
               }}
             />
           )}
