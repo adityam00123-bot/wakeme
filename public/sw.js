@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wakeme-v1';
+const CACHE_NAME = 'wakeme-v2';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -30,10 +30,13 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // Cache-first for map tiles so previously viewed Mumbai corridors work offline
-  if (url.hostname.includes('tile.openstreetmap.org') || url.hostname.includes('basemaps.cartocdn.com')) {
+  // Cache vector/raster map tiles & styles so corridor views stay available offline
+  if (
+    url.hostname.includes('openfreemap.org') ||
+    url.hostname.includes('tile.openstreetmap.org')
+  ) {
     event.respondWith(
-      caches.open('wakeme-map-tiles').then(async (cache) => {
+      caches.open('wakeme-map-tiles-v2').then(async (cache) => {
         const cached = await cache.match(request);
         if (cached) return cached;
         try {
@@ -48,7 +51,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first with offline fallback for app navigation & assets
   if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(request)

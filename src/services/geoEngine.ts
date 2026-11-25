@@ -162,7 +162,7 @@ export interface SearchPlaceResult {
   subtitle: string;
   lat: number;
   lng: number;
-  source: 'Mumbai Local (Offline)' | 'OpenStreetMap';
+  source: 'Offline Junction DB' | 'OpenStreetMap';
   line?: MumbaiStation['line'];
 }
 
@@ -170,7 +170,7 @@ export async function searchPlacesHybrid(query: string): Promise<SearchPlaceResu
   const q = query.trim().toLowerCase();
   if (!q) return [];
 
-  // 1. Instant offline Mumbai Local station lookup
+  // 1. Instant offline station & city lookup (Long-Distance + Mumbai Local)
   const localMatches: SearchPlaceResult[] = MUMBAI_STATIONS.filter(
     (st) =>
       st.name.toLowerCase().includes(q) ||
@@ -181,10 +181,10 @@ export async function searchPlacesHybrid(query: string): Promise<SearchPlaceResu
     .map((st) => ({
       id: st.id,
       name: st.name,
-      subtitle: `${st.line} Line (${st.code}) • Offline Ready`,
+      subtitle: `${st.line} (${st.code}) · Offline Ready`,
       lat: st.lat,
       lng: st.lng,
-      source: 'Mumbai Local (Offline)',
+      source: 'Offline Junction DB',
       line: st.line,
     }));
 
@@ -192,13 +192,13 @@ export async function searchPlacesHybrid(query: string): Promise<SearchPlaceResu
     return localMatches;
   }
 
-  // 2. Non-blocking Photon OSM lookup (Mumbai biased) with short timeout
+  // 2. Non-blocking Photon OSM lookup (pan-India search, biased around West India)
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(
-      query + ' Mumbai'
-    )}&lat=19.076&lon=72.8777&limit=5`;
+      query
+    )}&lat=19.076&lon=72.8777&limit=6`;
 
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);

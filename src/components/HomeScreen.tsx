@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowRight,
+  BellRing,
   Briefcase,
+  Bus,
   ChevronRight,
   Edit3,
   GraduationCap,
@@ -11,6 +13,7 @@ import {
   Radio,
   Search,
   Star,
+  Train,
   TrainFront,
   Trash2,
 } from 'lucide-react';
@@ -20,9 +23,7 @@ import { Destination, DestinationCategory, MumbaiPresetRoute } from '../types/wa
 interface HomeScreenProps {
   destinations: Destination[];
   hasActiveJourney: boolean;
-  previewDestinationId?: string | null;
   onGoToAdd: () => void;
-  onPreviewDestination: (dest: Destination) => void;
   onStartWithDestination: (dest: Destination) => void;
   onStartPresetRoute: (route: MumbaiPresetRoute) => void;
   onResumeJourney: () => void;
@@ -47,6 +48,8 @@ function getCategoryIcon(cat: DestinationCategory) {
 }
 
 function getLineTag(line: string) {
+  if (line === 'Express') return { code: 'EXP', cls: 'bg-indigo-500/20 text-indigo-300 border-indigo-400/35' };
+  if (line === 'Bus') return { code: 'BUS', cls: 'bg-rose-500/20 text-rose-300 border-rose-400/35' };
   if (line === 'Western') return { code: 'WR', cls: 'bg-sky-500/15 text-sky-300 border-sky-400/30' };
   if (line === 'Central') return { code: 'CR', cls: 'bg-amber-500/15 text-amber-300 border-amber-400/30' };
   if (line === 'Harbour') return { code: 'HB', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' };
@@ -56,9 +59,7 @@ function getLineTag(line: string) {
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   destinations,
   hasActiveJourney,
-  previewDestinationId,
   onGoToAdd,
-  onPreviewDestination,
   onStartWithDestination,
   onStartPresetRoute,
   onResumeJourney,
@@ -67,7 +68,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onRenameDestination,
 }) => {
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'All' | 'Favourites' | 'Central' | 'Western' | 'Harbour'>('All');
+  const [corridorScope, setCorridorScope] = useState<'long_distance' | 'local'>('long_distance');
+  const [filter, setFilter] = useState<'All' | 'Favourites' | 'Long-Distance' | 'Local'>('All');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
 
@@ -79,12 +81,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     [destinations]
   );
 
-  const filtered = useMemo(() => {
+  const visibleRoutes = useMemo(
+    () => MUMBAI_PRESET_ROUTES.filter((r) => r.scope === corridorScope),
+    [corridorScope]
+  );
+
+  const filteredDestinations = useMemo(() => {
     const q = search.trim().toLowerCase();
     return destinations
       .filter((d) => {
         if (filter === 'Favourites' && !d.favourite_status) return false;
-        if (['Central', 'Western', 'Harbour'].includes(filter) && d.line !== filter) return false;
+        if (filter === 'Long-Distance' && d.line !== 'Express' && d.line !== 'Bus') return false;
+        if (filter === 'Local' && d.line !== 'Central' && d.line !== 'Western' && d.line !== 'Harbour') {
+          return false;
+        }
         if (!q) return true;
         return (
           d.destination_name.toLowerCase().includes(q) ||
@@ -96,75 +106,82 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   }, [destinations, search, filter]);
 
   return (
-    <div className="space-y-6">
-      {/* Live Journey Resume Strip */}
+    <div className="space-y-5">
+      {/* Live Journey Resume Banner */}
       {hasActiveJourney && (
         <button
           type="button"
           onClick={onResumeJourney}
-          className="pressable flex w-full items-center justify-between rounded-2xl border border-emerald-400/35 bg-emerald-500/15 px-4 py-3 text-left"
+          className="pressable flex w-full items-center justify-between rounded-2xl border border-emerald-400/35 bg-emerald-500/15 px-4 py-3.5 text-left"
         >
           <div className="flex items-center gap-3">
-            <Radio className="h-4 w-4 animate-pulse text-emerald-400" />
+            <Radio className="h-5 w-5 animate-pulse text-emerald-400" />
             <div>
-              <p className="text-sm font-semibold text-emerald-200">WakeMe is monitoring your stop</p>
-              <p className="text-xs text-emerald-300/80">Open live radar &amp; fallback timer</p>
+              <p className="text-sm font-bold text-emerald-200">WakeMe is monitoring your stop</p>
+              <p className="text-xs text-emerald-300/80">Tap to open live radar &amp; fallback countdown</p>
             </div>
           </div>
           <ChevronRight className="h-4 w-4 text-emerald-300" />
         </button>
       )}
 
-      {/* Conversational Destination Prompt (Citymapper / Uber Pattern) */}
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-xl font-bold tracking-[-0.025em] text-white">
-            Where are you getting off?
-          </h1>
+      {/* Primary Commuter Launcher Card (Clean App Home — No Cluttered Startup Map) */}
+      <section className="rounded-3xl border border-white/[0.08] bg-[#0e1524] p-4 shadow-lg">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-extrabold tracking-[-0.025em] text-white">
+              Sleep safe on the move
+            </h1>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              Set a GPS + Dead-Reckoning stop alarm for overnight trains, buses, or local commutes.
+            </p>
+          </div>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-cyan-400/15 text-cyan-300">
+            <BellRing className="h-5 w-5" />
+          </span>
+        </div>
+
+        {/* Search / Add Destination Bar */}
+        <div className="mt-4 flex items-center gap-2">
+          <div className="relative flex flex-1 items-center">
+            <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search Pune, Nashik, Dadar, Thane…"
+              className="w-full rounded-2xl border border-white/10 bg-[#05070b] py-3 pl-10 pr-3 text-base text-white placeholder-slate-400 outline-none focus:border-cyan-400/60 sm:text-sm"
+            />
+          </div>
           <button
             type="button"
             onClick={onGoToAdd}
-            className="pressable inline-flex items-center gap-1 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-400/20"
+            className="pressable inline-flex h-[46px] shrink-0 items-center gap-1.5 rounded-2xl bg-cyan-400 px-3.5 text-xs font-bold text-slate-950 hover:bg-cyan-300"
           >
-            <Plus className="h-3.5 w-3.5" />
-            Drop pin
+            <Plus className="h-4 w-4" />
+            Add Stop
           </button>
         </div>
 
-        <div className="relative flex items-center">
-          <Search className="pointer-events-none absolute left-4 h-4 w-4 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter saved stops or search stations…"
-            className="w-full rounded-2xl border border-white/10 bg-[#11192b] py-3.5 pl-11 pr-4 text-base text-white placeholder-slate-400 outline-none transition-colors focus:border-cyan-400/60 sm:text-sm"
-          />
-        </div>
-
-        {/* 1-Tap Quick Commute Shortcuts */}
+        {/* 1-Tap Quick Shortcuts */}
         {quickShortcuts.length > 0 && (
-          <div className="grid grid-cols-4 gap-2 pt-1">
+          <div className="mt-3.5 grid grid-cols-4 gap-2">
             {quickShortcuts.map((dest) => {
               const Icon = getCategoryIcon(dest.category);
               const shortLabel = dest.destination_name.split(' ')[0];
-              const isSelected = previewDestinationId === dest.destination_id;
               return (
                 <button
                   key={dest.destination_id}
                   type="button"
                   onClick={() => onStartWithDestination(dest)}
-                  onMouseEnter={() => onPreviewDestination(dest)}
-                  className={`pressable flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-2xl border px-2 py-2.5 text-center ${
-                    isSelected
-                      ? 'border-cyan-400/50 bg-cyan-400/12 text-white'
-                      : 'border-white/[0.07] bg-[#0e1524] text-slate-200 hover:border-white/15 hover:bg-[#131d31]'
-                  }`}
+                  className="pressable flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-2xl border border-white/[0.07] bg-[#090e1a] px-2 py-2 text-center hover:border-cyan-400/40"
                 >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/[0.06] text-cyan-300">
-                    <Icon className="h-4 w-4" />
+                  <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-white/[0.06] text-cyan-300">
+                    <Icon className="h-3.5 w-3.5" />
                   </span>
-                  <span className="w-full truncate text-xs font-semibold">{shortLabel}</span>
+                  <span className="w-full truncate text-[11px] font-semibold text-slate-200">
+                    {shortLabel}
+                  </span>
                 </button>
               );
             })}
@@ -172,20 +189,46 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         )}
       </section>
 
-      {/* Mumbai Local Live Corridors */}
-      <section className="space-y-2.5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold tracking-[-0.01em] text-slate-200">
-            Mumbai Local corridors
+      {/* Journey Routes: Long-Distance (Default) + Mumbai Local */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold tracking-[-0.01em] text-white">
+            Quick route presets
           </h2>
-          <span className="text-xs text-slate-400">Instant demo routes</span>
+          <div className="flex rounded-xl border border-white/[0.08] bg-[#0e1524] p-0.5">
+            <button
+              type="button"
+              onClick={() => setCorridorScope('long_distance')}
+              className={`pressable inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                corridorScope === 'long_distance'
+                  ? 'bg-cyan-400 text-slate-950'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Train className="h-3 w-3" />
+              Long-Distance
+            </button>
+            <button
+              type="button"
+              onClick={() => setCorridorScope('local')}
+              className={`pressable inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                corridorScope === 'local'
+                  ? 'bg-cyan-400 text-slate-950'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <TrainFront className="h-3 w-3" />
+              Mumbai Local
+            </button>
+          </div>
         </div>
 
         <div className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e1524]">
-          {MUMBAI_PRESET_ROUTES.map((route) => {
+          {visibleRoutes.map((route) => {
             const first = getStationById(route.stationIds[0]);
             const last = getStationById(route.stationIds[route.stationIds.length - 1]);
             const badge = getLineTag(route.line);
+            const isBus = route.line === 'Bus';
 
             return (
               <button
@@ -196,15 +239,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <span
-                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border text-xs font-bold ${badge.cls}`}
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border text-[11px] font-bold ${badge.cls}`}
                   >
-                    {badge.code}
+                    {isBus ? <Bus className="h-4 w-4" /> : badge.code}
                   </span>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">{route.title}</p>
-                    <p className="mt-0.5 text-xs text-slate-400">
+                    <p className="mt-0.5 truncate text-xs text-slate-400">
                       {first?.code} to {last?.code} · {route.stationIds.length} stops ·{' '}
                       <span className="tabular-nums">{route.avgSpeedKmh} km/h</span>
+                      {route.highlightNote ? ` · ${route.highlightNote}` : ''}
                     </p>
                   </div>
                 </div>
@@ -215,17 +259,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
       </section>
 
-      {/* Saved Destinations List */}
+      {/* Saved Destinations */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold tracking-[-0.01em] text-slate-200">
-            Saved stops ({destinations.length})
+          <h2 className="text-sm font-bold tracking-[-0.01em] text-white">
+            Saved destinations ({destinations.length})
           </h2>
         </div>
 
-        {/* Clean Filter Pills */}
         <div className="no-scrollbar flex gap-2 overflow-x-auto pb-0.5">
-          {(['All', 'Favourites', 'Central', 'Western', 'Harbour'] as const).map((tab) => (
+          {(['All', 'Favourites', 'Long-Distance', 'Local'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -241,33 +284,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           ))}
         </div>
 
-        {filtered.length === 0 ? (
+        {filteredDestinations.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 bg-[#0e1524]/60 p-6 text-center">
-            <p className="text-sm font-medium text-slate-300">No saved stops match "{search}"</p>
+            <p className="text-sm font-medium text-slate-300">No matching destinations found</p>
             <button
               type="button"
               onClick={onGoToAdd}
               className="pressable mt-3 rounded-xl bg-cyan-400 px-4 py-2 text-xs font-bold text-slate-950"
             >
-              Search or drop pin
+              Search or drop map pin
             </button>
           </div>
         ) : (
           <div className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e1524]">
-            {filtered.map((dest) => {
+            {filteredDestinations.map((dest) => {
               const Icon = getCategoryIcon(dest.category);
               const badge = getLineTag(dest.line);
               const isEditing = editingId === dest.destination_id;
-              const isPreviewed = previewDestinationId === dest.destination_id;
 
               return (
-                <div
-                  key={dest.destination_id}
-                  onClick={() => onPreviewDestination(dest)}
-                  className={`cursor-pointer px-4 py-3.5 transition-colors ${
-                    isPreviewed ? 'bg-cyan-400/[0.06]' : 'hover:bg-white/[0.025]'
-                  }`}
-                >
+                <div key={dest.destination_id} className="px-4 py-3.5 hover:bg-white/[0.02]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 flex-1 items-start gap-3">
                       <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-cyan-300">
@@ -275,10 +311,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                       </span>
                       <div className="min-w-0 flex-1">
                         {isEditing ? (
-                          <div
-                            className="flex items-center gap-2"
-                            onClick={(e) => e.stopPropagation()}
-                          >
+                          <div className="flex items-center gap-2">
                             <input
                               type="text"
                               value={editValue}
@@ -318,10 +351,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                       </div>
                     </div>
 
-                    <div
-                      className="flex items-center gap-1"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => onToggleFavourite(dest.destination_id)}
@@ -356,10 +386,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     </div>
                   </div>
 
-                  <div
-                    className="mt-2.5 flex items-center justify-between pl-12"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+                  <div className="mt-2.5 flex items-center justify-between pl-12">
                     <span className="font-mono-num text-[11px] text-slate-500">
                       {dest.latitude.toFixed(4)}, {dest.longitude.toFixed(4)}
                     </span>

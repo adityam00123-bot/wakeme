@@ -1,8 +1,39 @@
 import React, { useEffect, useRef } from 'react';
-import L from 'leaflet';
-import { Crosshair, Layers } from 'lucide-react';
-import { MUMBAI_PRESET_ROUTES, getStationById } from '../data/mumbaiLocal';
-import { Destination } from '../types/wakeme';
+import {
+  AttributionControl,
+  GeoJSONSource,
+  LngLatBounds,
+  Map as MapLibreMap,
+  MapMouseEvent,
+  Marker,
+  setWorkerUrl,
+} from 'maplibre-gl';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+import { Crosshair, Maximize2 } from 'lucide-react';
+
+setWorkerUrl(workerUrl);
+
+type GeoFeature =
+  | {
+      type: 'Feature';
+      properties: Record<string, unknown>;
+      geometry: { type: 'LineString'; coordinates: number[][] };
+    }
+  | {
+      type: 'Feature';
+      properties: Record<string, unknown>;
+      geometry: { type: 'Point'; coordinates: number[] };
+    }
+  | {
+      type: 'Feature';
+      properties: Record<string, unknown>;
+      geometry: { type: 'Polygon'; coordinates: number[][][] };
+    };
+
+interface GeoCollection {
+  type: 'FeatureCollection';
+  features: GeoFeature[];
+}
 
 interface StationPin {
   name: string;
@@ -20,22 +51,27 @@ interface LiveMapProps {
   userLng?: number;
   alertRadiusKm?: number;
   routeWaypoints?: StationPin[];
-  savedDestinations?: Destination[];
-  showMumbaiNetwork?: boolean;
   isDeadReckoning?: boolean;
   isAlerting?: boolean;
   interactivePinMode?: boolean;
   onMapClick?: (lat: number, lng: number) => void;
-  onSelectDestinationPin?: (dest: Destination) => void;
   className?: string;
   zoom?: number;
 }
 
-const LINE_COLORS: Record<string, string> = {
-  Western: '#38bdf8',
-  Central: '#f59e0b',
-  Harbour: '#10b981',
-};
+const OPENFREEMAP_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+
+function createCirclePolygon(lng: number, lat: number, radiusKm: number, points = 64): number[][] {
+  const coords: number[][] = [];
+  const distanceX = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+  const distanceY = radiusKm / 110.574;
+
+  for (let i = 0; i <= points; i++) {
+    const theta = (i / points) * (2 * Math.PI);
+    coords.push([lng + distanceX * Math.cos(theta), lat + distanceY * Math.sin(theta)]);
+  }
+  return coords;
+}
 
 export const LiveMap: React.FC<LiveMapProps> = ({
   centerLat,
@@ -47,202 +83,309 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   userLng,
   alertRadiusKm = 2.0,
   routeWaypoints = [],
-  savedDestinations = [],
-  showMumbaiNetwork = false,
   isDeadReckoning = false,
   isAlerting = false,
   interactivePinMode = false,
   onMapClick,
-  onSelectDestinationPin,
-  className = 'h-full w-full',
+  className = 'h-60 w-full',
   zoom = 11,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const layerGroupRef = useRef<L.LayerGroup | null>(null);
-  const lastFittedRouteRef = useRef<string>('');
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const destMarkerRef = useRef<Marker | null>(null);
+  const userMarkerRef = useRef<Marker | null>(null);
+  const lastFittedKeyRef = useRef<string>('');
   const onClickRef = useRef(onMapClick);
-  const onSelectPinRef = useRef(onSelectDestinationPin);
   onClickRef.current = onMapClick;
-  onSelectPinRef.current = onSelectDestinationPin;
+
+  const latestPropsRef = useRef({
+    destLat,
+    destLng,
+    destName,
+    userLat,
+    userLng,
+    alertRadiusKm,
+    routeWaypoints,
+    isDeadReckoning,
+    isAlerting,
+  });
+  latestPropsRef.current = {
+    destLat,
+    destLng,
+    destName,
+    userLat,
+    userLng,
+    alertRadiusKm,
+    routeWaypoints,
+    isDeadReckoning,
+    isAlerting,
+  };
+
+  const syncGeoJsonLayers = (map: MapLibreMap) => {
+    if (!map.isStyleLoaded()) return;
+    const p = latestPropsRef.current;
+    const accentColor = p.isAlerting ? '#ef4444' : p.isDeadReckoning ? '#f59e0b' : '#22d3ee';
+
+    // Route Line + Stations GeoJSON
+    const routeFeature: GeoCollection = {
+      type: 'FeatureCollection',
+      features:
+        p.routeWaypoints.length >= 2
+          ? [
+              {
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'LineString',
+                  coordinates: p.routeWaypoints.map((w) => [w.lng, w.lat]),
+                },
+              },
+              ...p.routeWaypoints.map((w) => ({
+                type: 'Feature' as const,
+                properties: { name: w.name },
+                geometry: {
+                  type: 'Point' as const,
+                  coordinates: [w.lng, w.lat],
+                },
+              })),
+            ]
+          : [],
+    };
+
+    // Alert Radius Circle GeoJSON
+    const circleFeature: GeoCollection = {
+      type: 'FeatureCollection',
+      features:
+        typeof p.destLat === 'number' && typeof p.destLng === 'number'
+          ? [
+              {
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'Polygon',
+                  coordinates: [createCirclePolygon(p.destLng, p.destLat, Math.max(0.15, p.alertRadiusKm))],
+                },
+              },
+            ]
+          : [],
+    };
+
+    const routeSrc = map.getSource('wakeme-route') as GeoJSONSource | undefined;
+    if (routeSrc) {
+      routeSrc.setData(routeFeature as unknown as Parameters<GeoJSONSource['setData']>[0]);
+    } else {
+      map.addSource('wakeme-route', {
+        type: 'geojson',
+        data: routeFeature as unknown as Parameters<GeoJSONSource['setData']>[0],
+      });
+      map.addLayer({
+        id: 'wakeme-route-line',
+        type: 'line',
+        source: 'wakeme-route',
+        filter: ['==', '$type', 'LineString'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': accentColor,
+          'line-width': 3.5,
+          'line-opacity': 0.85,
+        },
+      });
+      map.addLayer({
+        id: 'wakeme-route-points',
+        type: 'circle',
+        source: 'wakeme-route',
+        filter: ['==', '$type', 'Point'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#05070b',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': accentColor,
+        },
+      });
+    }
+
+    if (map.getLayer('wakeme-route-line')) {
+      map.setPaintProperty('wakeme-route-line', 'line-color', accentColor);
+    }
+    if (map.getLayer('wakeme-route-points')) {
+      map.setPaintProperty('wakeme-route-points', 'circle-stroke-color', accentColor);
+    }
+
+    const circleSrc = map.getSource('wakeme-circle') as GeoJSONSource | undefined;
+    if (circleSrc) {
+      circleSrc.setData(circleFeature as unknown as Parameters<GeoJSONSource['setData']>[0]);
+    } else {
+      map.addSource('wakeme-circle', {
+        type: 'geojson',
+        data: circleFeature as unknown as Parameters<GeoJSONSource['setData']>[0],
+      });
+      map.addLayer({
+        id: 'wakeme-circle-fill',
+        type: 'fill',
+        source: 'wakeme-circle',
+        paint: {
+          'fill-color': accentColor,
+          'fill-opacity': 0.14,
+        },
+      });
+      map.addLayer({
+        id: 'wakeme-circle-outline',
+        type: 'line',
+        source: 'wakeme-circle',
+        paint: {
+          'line-color': accentColor,
+          'line-width': 2,
+          'line-opacity': 0.8,
+        },
+      });
+    }
+
+    if (map.getLayer('wakeme-circle-fill')) {
+      map.setPaintProperty('wakeme-circle-fill', 'fill-color', accentColor);
+      map.setPaintProperty('wakeme-circle-fill', 'fill-opacity', p.isAlerting ? 0.24 : 0.14);
+    }
+    if (map.getLayer('wakeme-circle-outline')) {
+      map.setPaintProperty('wakeme-circle-outline', 'line-color', accentColor);
+    }
+  };
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    const map = L.map(containerRef.current, {
-      center: [centerLat, centerLng],
+    const map = new MapLibreMap({
+      container: containerRef.current,
+      style: OPENFREEMAP_DARK_STYLE,
+      center: [centerLng, centerLat],
       zoom,
-      zoomControl: false,
-      attributionControl: true,
+      attributionControl: false,
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
-      maxZoom: 19,
-    }).addTo(map);
+    map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 
-    const group = L.layerGroup().addTo(map);
-    mapRef.current = map;
-    layerGroupRef.current = group;
+    map.on('style.load', () => {
+      syncGeoJsonLayers(map);
+    });
 
-    map.on('click', (e: L.LeafletMouseEvent) => {
+    map.on('error', () => {
+      // Fallback empty dark vector style if offline before style loads
+      if (!map.isStyleLoaded()) {
+        try {
+          map.setStyle({
+            version: 8,
+            sources: {},
+            layers: [
+              {
+                id: 'offline-bg',
+                type: 'background',
+                paint: { 'background-color': '#070b14' },
+              },
+            ],
+          });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+
+    map.on('click', (e: MapMouseEvent) => {
       if (onClickRef.current) {
-        onClickRef.current(e.latlng.lat, e.latlng.lng);
+        onClickRef.current(e.lngLat.lat, e.lngLat.lng);
       }
     });
 
     const observer = new ResizeObserver(() => {
-      map.invalidateSize();
+      map.resize();
     });
     observer.observe(containerRef.current);
 
+    mapRef.current = map;
+
     return () => {
       observer.disconnect();
+      destMarkerRef.current?.remove();
+      userMarkerRef.current?.remove();
       map.remove();
       mapRef.current = null;
-      layerGroupRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Update markers & GeoJSON layers on prop updates
   useEffect(() => {
     const map = mapRef.current;
-    const group = layerGroupRef.current;
-    if (!map || !group) return;
+    if (!map) return;
 
-    group.clearLayers();
+    syncGeoJsonLayers(map);
 
-    // 1. Optional Mumbai Rail Network Background Lines (Home / Overview)
-    if (showMumbaiNetwork) {
-      MUMBAI_PRESET_ROUTES.forEach((route) => {
-        const pts: L.LatLngExpression[] = [];
-        route.stationIds.forEach((id) => {
-          const st = getStationById(id);
-          if (st) pts.push([st.lat, st.lng]);
-        });
-        if (pts.length >= 2) {
-          const color = LINE_COLORS[route.line] || '#22d3ee';
-          L.polyline(pts, {
-            color,
-            weight: 3,
-            opacity: 0.45,
-          }).addTo(group);
-
-          pts.forEach((pt, idx) => {
-            const st = getStationById(route.stationIds[idx]);
-            if (!st) return;
-            L.circleMarker(pt, {
-              radius: st.isMajor ? 4 : 2.5,
-              color,
-              fillColor: '#05070b',
-              fillOpacity: 1,
-              weight: 1.5,
-            })
-              .bindTooltip(`${st.name} (${st.code})`, { direction: 'top' })
-              .addTo(group);
-          });
-        }
-      });
-
-      // Saved Destinations on Overview Map
-      savedDestinations.forEach((dest) => {
-        const isFocused =
-          typeof destLat === 'number' &&
-          typeof destLng === 'number' &&
-          Math.abs(dest.latitude - destLat) < 0.0005 &&
-          Math.abs(dest.longitude - destLng) < 0.0005;
-        if (isFocused) return;
-
-        const pinColor = LINE_COLORS[dest.line] || '#22d3ee';
-        const marker = L.circleMarker([dest.latitude, dest.longitude], {
-          radius: 6,
-          color: '#ffffff',
-          fillColor: pinColor,
-          fillOpacity: 0.95,
-          weight: 2,
-        })
-          .bindTooltip(dest.destination_name, { direction: 'top' })
-          .addTo(group);
-
-        marker.on('click', () => {
-          if (onSelectPinRef.current) onSelectPinRef.current(dest);
-        });
-      });
-    }
-
-    // 2. Active Route Polyline & Waypoint Stations
-    if (routeWaypoints.length >= 2) {
-      const latLngs: L.LatLngExpression[] = routeWaypoints.map((w) => [w.lat, w.lng]);
-      L.polyline(latLngs, {
-        color: isDeadReckoning ? '#f59e0b' : '#22d3ee',
-        weight: 4,
-        opacity: 0.85,
-        dashArray: isDeadReckoning ? '6 8' : undefined,
-      }).addTo(group);
-
-      routeWaypoints.forEach((wp, idx) => {
-        if (idx === routeWaypoints.length - 1) return;
-        L.circleMarker([wp.lat, wp.lng], {
-          radius: 4.5,
-          color: isDeadReckoning ? '#f59e0b' : '#38bdf8',
-          fillColor: '#05070b',
-          fillOpacity: 1,
-          weight: 2,
-        })
-          .bindTooltip(wp.name, { direction: 'top' })
-          .addTo(group);
-      });
-    }
-
-    // 3. Target Destination Pin + Approach Radius Ring
+    const destColor = isAlerting ? '#ef4444' : isDeadReckoning ? '#f59e0b' : '#22d3ee';
     if (typeof destLat === 'number' && typeof destLng === 'number') {
-      const circleColor = isAlerting ? '#ef4444' : isDeadReckoning ? '#f59e0b' : '#22d3ee';
-      L.circle([destLat, destLng], {
-        radius: Math.max(120, alertRadiusKm * 1000),
-        color: circleColor,
-        weight: 2,
-        fillColor: circleColor,
-        fillOpacity: isAlerting ? 0.24 : 0.13,
-        dashArray: isDeadReckoning ? '6 6' : undefined,
-      }).addTo(group);
-
-      const destIcon = L.divIcon({
-        className: 'wakeme-dest-icon',
-        html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:30px;height:30px;">
-          <span style="position:absolute;inset:0;border-radius:9999px;background:${circleColor};opacity:0.28;"></span>
-          <span style="width:14px;height:14px;border-radius:9999px;background:${circleColor};border:2.5px solid #05070b;box-shadow:0 0 14px ${circleColor};"></span>
-        </div>`,
-        iconSize: [30, 30],
-        iconAnchor: [15, 15],
-      });
-
-      const marker = L.marker([destLat, destLng], { icon: destIcon }).addTo(group);
-      if (destName) {
-        marker.bindTooltip(`${destName} • ${alertRadiusKm.toFixed(1)} km alert`, {
-          direction: 'top',
-          offset: [0, -12],
-        });
+      if (!destMarkerRef.current) {
+        const el = document.createElement('div');
+        el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;">
+          <span style="position:absolute;inset:0;border-radius:9999px;background:${destColor};opacity:0.3;"></span>
+          <span style="width:13px;height:13px;border-radius:9999px;background:${destColor};border:2.5px solid #05070b;box-shadow:0 0 14px ${destColor};"></span>
+        </div>`;
+        destMarkerRef.current = new Marker({ element: el })
+          .setLngLat([destLng, destLat])
+          .addTo(map);
+      } else {
+        destMarkerRef.current.setLngLat([destLng, destLat]);
+        const dot = destMarkerRef.current.getElement().querySelectorAll('span');
+        if (dot[0]) (dot[0] as HTMLElement).style.background = destColor;
+        if (dot[1]) {
+          (dot[1] as HTMLElement).style.background = destColor;
+          (dot[1] as HTMLElement).style.boxShadow = `0 0 14px ${destColor}`;
+        }
       }
+    } else {
+      destMarkerRef.current?.remove();
+      destMarkerRef.current = null;
     }
 
-    // 4. Live User / Train Position Marker
+    const userColor = isDeadReckoning ? '#f59e0b' : '#10b981';
     if (typeof userLat === 'number' && typeof userLng === 'number') {
-      const userColor = isDeadReckoning ? '#f59e0b' : '#10b981';
-      const userIcon = L.divIcon({
-        className: 'wakeme-user-icon',
-        html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:34px;height:34px;">
-          <span style="position:absolute;width:30px;height:30px;border-radius:9999px;background:${userColor};opacity:0.32;"></span>
+      if (!userMarkerRef.current) {
+        const el = document.createElement('div');
+        el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;">
+          <span style="position:absolute;inset:0;border-radius:9999px;background:${userColor};opacity:0.32;"></span>
           <span style="width:14px;height:14px;border-radius:9999px;background:${userColor};border:3px solid #ffffff;box-shadow:0 0 14px ${userColor};"></span>
-        </div>`,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
-      });
+        </div>`;
+        userMarkerRef.current = new Marker({ element: el })
+          .setLngLat([userLng, userLat])
+          .addTo(map);
+      } else {
+        userMarkerRef.current.setLngLat([userLng, userLat]);
+        const dot = userMarkerRef.current.getElement().querySelectorAll('span');
+        if (dot[0]) (dot[0] as HTMLElement).style.background = userColor;
+        if (dot[1]) {
+          (dot[1] as HTMLElement).style.background = userColor;
+          (dot[1] as HTMLElement).style.boxShadow = `0 0 14px ${userColor}`;
+        }
+      }
+    } else {
+      userMarkerRef.current?.remove();
+      userMarkerRef.current = null;
+    }
 
-      L.marker([userLat, userLng], { icon: userIcon })
-        .bindTooltip(isDeadReckoning ? 'Estimated Train Position' : 'Current Location', {
-          direction: 'top',
-        })
-        .addTo(group);
+    // Auto-fit route bounds once per journey or pan in pin-drop mode
+    if (
+      typeof userLat === 'number' &&
+      typeof userLng === 'number' &&
+      typeof destLat === 'number' &&
+      typeof destLng === 'number'
+    ) {
+      const key = `${destLat.toFixed(4)},${destLng.toFixed(4)}:${routeWaypoints.length}`;
+      if (lastFittedKeyRef.current !== key) {
+        lastFittedKeyRef.current = key;
+        const bounds = new LngLatBounds([userLng, userLat], [destLng, destLat]);
+        routeWaypoints.forEach((w) => bounds.extend([w.lng, w.lat]));
+        map.fitBounds(bounds, { padding: 42, maxZoom: 12, duration: 700 });
+      }
+    } else {
+      lastFittedKeyRef.current = '';
+      if (interactivePinMode && typeof destLat === 'number' && typeof destLng === 'number') {
+        map.easeTo({ center: [destLng, destLat], duration: 400 });
+      }
     }
   }, [
     destLat,
@@ -252,98 +395,70 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     userLng,
     alertRadiusKm,
     routeWaypoints,
-    savedDestinations,
-    showMumbaiNetwork,
     isDeadReckoning,
     isAlerting,
+    interactivePinMode,
   ]);
-
-  // Smooth pan/fit when previewing a destination, dropping a pin, or starting a journey
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (typeof userLat === 'number' && typeof userLng === 'number' && typeof destLat === 'number' && typeof destLng === 'number') {
-      const routeKey = `${destLat.toFixed(4)},${destLng.toFixed(4)}:${routeWaypoints.length}`;
-      if (lastFittedRouteRef.current !== routeKey) {
-        lastFittedRouteRef.current = routeKey;
-        const pts: L.LatLngExpression[] = [[userLat, userLng], [destLat, destLng]];
-        routeWaypoints.forEach((w) => pts.push([w.lat, w.lng]));
-        map.fitBounds(L.latLngBounds(pts), { padding: [38, 38], maxZoom: 13, animate: true });
-      }
-      return;
-    }
-
-    lastFittedRouteRef.current = '';
-    if (interactivePinMode && typeof destLat === 'number' && typeof destLng === 'number') {
-      map.panTo([destLat, destLng], { animate: true });
-    } else if (!userLat && typeof destLat === 'number' && typeof destLng === 'number') {
-      map.setView([destLat, destLng], 12, { animate: true });
-    }
-  }, [interactivePinMode, destLat, destLng, userLat, userLng, routeWaypoints]);
 
   const handleFitBounds = () => {
     const map = mapRef.current;
     if (!map) return;
-    const pts: L.LatLngExpression[] = [];
-    if (typeof userLat === 'number' && typeof userLng === 'number') pts.push([userLat, userLng]);
-    if (typeof destLat === 'number' && typeof destLng === 'number') pts.push([destLat, destLng]);
-    if (routeWaypoints.length >= 2) {
-      routeWaypoints.forEach((w) => pts.push([w.lat, w.lng]));
-    }
-
-    if (pts.length >= 2) {
-      map.fitBounds(L.latLngBounds(pts), { padding: [48, 48], maxZoom: 14 });
-    } else if (pts.length === 1) {
-      map.setView(pts[0], 13, { animate: true });
+    if (
+      typeof userLat === 'number' &&
+      typeof userLng === 'number' &&
+      typeof destLat === 'number' &&
+      typeof destLng === 'number'
+    ) {
+      const bounds = new LngLatBounds([userLng, userLat], [destLng, destLat]);
+      routeWaypoints.forEach((w) => bounds.extend([w.lng, w.lat]));
+      map.fitBounds(bounds, { padding: 42, maxZoom: 13, duration: 500 });
+    } else if (typeof destLat === 'number' && typeof destLng === 'number') {
+      map.easeTo({ center: [destLng, destLat], zoom: 12, duration: 500 });
     } else {
-      map.setView([centerLat, centerLng], zoom, { animate: true });
+      map.easeTo({ center: [centerLng, centerLat], zoom, duration: 500 });
     }
   };
 
-  const handleMumbaiOverview = () => {
-    mapRef.current?.setView([19.085, 72.93], 11, { animate: true });
+  const handleWestIndiaOverview = () => {
+    mapRef.current?.easeTo({ center: [73.3, 19.05], zoom: 7.4, duration: 500 });
   };
 
   return (
-    <div className={`dark-map-tiles relative overflow-hidden bg-[#070b14] ${className}`}>
-      {/* Radar Grid Backdrop (stays crisp if tiles are offline) */}
+    <div className={`relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#070b14] ${className}`}>
+      {/* Fallback Radar Grid underneath WebGL canvas */}
       <div
         className="pointer-events-none absolute inset-0 opacity-20"
         style={{
           backgroundImage:
             'radial-gradient(circle at 50% 45%, rgba(34,211,238,0.16), transparent 60%), linear-gradient(to right, rgba(148,163,184,0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.12) 1px, transparent 1px)',
-          backgroundSize: '100% 100%, 32px 32px, 32px 32px',
+          backgroundSize: '100% 100%, 28px 28px, 28px 28px',
         }}
       />
 
       <div ref={containerRef} className="relative z-10 h-full w-full" />
 
       {interactivePinMode && (
-        <div className="pointer-events-none absolute left-4 bottom-8 z-20 rounded-full border border-cyan-400/30 bg-[#0b101c]/90 px-3.5 py-1.5 text-xs font-medium text-cyan-200 shadow-lg backdrop-blur-md">
-          Tap anywhere on the map to drop your destination pin
+        <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-cyan-400/30 bg-[#0b101c]/90 px-3 py-1 text-[11px] font-medium text-cyan-200 shadow-lg backdrop-blur">
+          Tap anywhere on map to pin stop
         </div>
       )}
 
-      {/* Map Utility Controls (docked clean right) */}
-      <div className="absolute right-3.5 top-16 z-20 flex flex-col gap-2 lg:top-4">
+      <div className="absolute right-2.5 top-2.5 z-20 flex flex-col gap-1.5">
         <button
           type="button"
           onClick={handleFitBounds}
-          aria-label="Fit active route on map"
-          title="Focus route"
-          className="pressable flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur-md hover:border-cyan-400/40 hover:text-cyan-300"
+          aria-label="Focus route on map"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur hover:border-cyan-400/40 hover:text-cyan-300"
         >
           <Crosshair className="h-4 w-4" />
         </button>
         <button
           type="button"
-          onClick={handleMumbaiOverview}
-          aria-label="Reset to Mumbai network overview"
-          title="Mumbai overview"
-          className="pressable flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur-md hover:border-cyan-400/40 hover:text-cyan-300"
+          onClick={handleWestIndiaOverview}
+          aria-label="Corridor overview"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur hover:border-cyan-400/40 hover:text-cyan-300"
         >
-          <Layers className="h-4 w-4" />
+          <Maximize2 className="h-4 w-4" />
         </button>
       </div>
     </div>

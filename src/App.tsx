@@ -1,11 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Compass, Home, Navigation, PlusCircle, Radio, Settings, User, WifiOff } from 'lucide-react';
 import { AddDestinationScreen } from './components/AddDestinationScreen';
 import { AlarmOverlay } from './components/AlarmOverlay';
 import { AuthModal } from './components/AuthModal';
 import { HomeScreen } from './components/HomeScreen';
 import { JourneyScreen, StartJourneyConfig } from './components/JourneyScreen';
-import { LiveMap } from './components/LiveMap';
 import { SettingsTelemetryScreen } from './components/SettingsTelemetryScreen';
 import { MUMBAI_PRESET_ROUTES, getStationById } from './data/mumbaiLocal';
 import { alertEngine } from './services/alertEngine';
@@ -46,20 +45,9 @@ export function App() {
   const [telemetryLogs, setTelemetryLogs] = useState<TelemetryLogEntry[]>(() => loadTelemetryLogs());
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
-  // Map preview / add pin state
-  const [previewDestination, setPreviewDestination] = useState<Destination | null>(
-    () => loadDestinations()[0] || null
-  );
-  const [pickedCoords, setPickedCoords] = useState<{ lat: number; lng: number }>({
-    lat: 19.0185,
-    lng: 72.8435,
-  });
-
-  // Pre-selected target for Journey tab
   const [selectedDestination, setSelectedDestination] = useState<Destination | null>(null);
   const [selectedPresetRoute, setSelectedPresetRoute] = useState<MumbaiPresetRoute | null>(null);
 
-  // Active Journey & Live Tracking State
   const [activeJourney, setActiveJourney] = useState<JourneyRecord | null>(null);
   const [liveState, setLiveState] = useState<LiveTrackingState | null>(null);
 
@@ -125,7 +113,6 @@ export function App() {
     const next = [dest, ...destinations];
     setDestinations(next);
     saveDestinations(next);
-    setPreviewDestination(dest);
     void syncRecordToSupabase('destinations', dest as unknown as Record<string, unknown>, user.preferences);
 
     if (startImmediately) {
@@ -320,21 +307,22 @@ export function App() {
       expected_stops_remaining: config.expectedStops,
       mode: config.mode,
       route_id: config.routeId,
-      max_speed_kmh: config.mode === 'simulator' ? preset?.avgSpeedKmh || 52 : 0,
+      max_speed_kmh: config.mode === 'simulator' ? preset?.avgSpeedKmh || 72 : 0,
       signal_drops_count: 0,
       estimated_battery_saved_pct: zoneInfo.powerSavingPct,
       min_distance_reached_km: initialDist,
     };
 
+    const defaultSimMultiplier = initialDist > 90 ? 30 : 15;
     const initialLive: LiveTrackingState = {
       currentLat: config.startLat,
       currentLng: config.startLng,
       distanceKm: initialDist,
-      speedKmh: config.mode === 'simulator' ? preset?.avgSpeedKmh || 52 : 0,
+      speedKmh: config.mode === 'simulator' ? preset?.avgSpeedKmh || 72 : 0,
       accuracyMeters: config.mode === 'simulator' ? 8 : 15,
       etaMinutes: Math.max(
         1,
-        Math.round((initialDist / (preset?.avgSpeedKmh || 48)) * 60)
+        Math.round((initialDist / (preset?.avgSpeedKmh || 64)) * 60)
       ),
       pollingZone: zoneInfo.zone,
       pollIntervalSec: zoneInfo.intervalSec,
@@ -350,7 +338,7 @@ export function App() {
       gpsChecksPerformed: 1,
       staticBaselineChecks: 1,
       simProgress: 0,
-      simSpeedMultiplier: 15,
+      simSpeedMultiplier: defaultSimMultiplier,
       nextStationName: simWaypointsRef.current[1]?.name || config.destination.destination_name,
       remainingStopsCount: config.expectedStops,
     };
@@ -451,7 +439,7 @@ export function App() {
           haversineDistanceKm(j.start_lat, j.start_lng, j.destination_lat, j.destination_lng)
         );
         const speedKmh =
-          MUMBAI_PRESET_ROUTES.find((r) => r.id === j.route_id)?.avgSpeedKmh || 52;
+          MUMBAI_PRESET_ROUTES.find((r) => r.id === j.route_id)?.avgSpeedKmh || 72;
         const kmPerRealSec = (speedKmh / 3600) * l.simSpeedMultiplier;
         const deltaProgress = kmPerRealSec / totalCorridorKm;
         const nextProgress = Math.min(1, l.simProgress + deltaProgress);
@@ -601,8 +589,8 @@ export function App() {
         2,
         haversineDistanceKm(j.start_lat, j.start_lng, j.destination_lat, j.destination_lng)
       );
-      const targetDist = j.configured_alert_distance + 0.65;
-      const targetProgress = Math.min(0.96, Math.max(0.1, 1 - targetDist / totalKm));
+      const targetDist = j.configured_alert_distance + 0.85;
+      const targetProgress = Math.min(0.97, Math.max(0.1, 1 - targetDist / totalKm));
       const pos = interpolateStations(simWaypointsRef.current, targetProgress);
       const actualDist = haversineDistanceKm(pos.lat, pos.lng, j.destination_lat, j.destination_lng);
       const z = getPollingZoneInfo(actualDist);
@@ -619,7 +607,7 @@ export function App() {
               pollIntervalSec: z.intervalSec,
               nextStationName: pos.nextStationName,
               remainingStopsCount: pos.remainingStopsCount,
-              simSpeedMultiplier: 5,
+              simSpeedMultiplier: 10,
             }
           : prev
       );
@@ -632,8 +620,8 @@ export function App() {
     const dummyDest = destinations[0];
     if (!activeJourney) {
       alertEngine.triggerAlarm({
-        destinationName: dummyDest?.destination_name || 'Dadar Station',
-        distanceKm: 1.4,
+        destinationName: dummyDest?.destination_name || 'Pune Junction',
+        distanceKm: 2.4,
         isFallback: false,
         prefs: user.preferences,
       });
@@ -644,189 +632,62 @@ export function App() {
     }
   };
 
-  // Determine Map Props based on current screen & journey state
-  const mapProps = useMemo(() => {
-    if (activeJourney && liveState) {
-      const preset = MUMBAI_PRESET_ROUTES.find((r) => r.id === activeJourney.route_id);
-      const waypoints = preset
-        ? preset.stationIds
-            .map((id) => getStationById(id))
-            .filter((s): s is NonNullable<typeof s> => Boolean(s))
-            .map((s) => ({ name: s.name, lat: s.lat, lng: s.lng }))
-        : [
-            {
-              name: activeJourney.start_location_name,
-              lat: activeJourney.start_lat,
-              lng: activeJourney.start_lng,
-            },
-            {
-              name: activeJourney.destination_name,
-              lat: activeJourney.destination_lat,
-              lng: activeJourney.destination_lng,
-            },
-          ];
-      return {
-        centerLat: liveState.currentLat,
-        centerLng: liveState.currentLng,
-        userLat: liveState.currentLat,
-        userLng: liveState.currentLng,
-        destLat: activeJourney.destination_lat,
-        destLng: activeJourney.destination_lng,
-        destName: activeJourney.destination_name,
-        alertRadiusKm: activeJourney.configured_alert_distance,
-        routeWaypoints: waypoints,
-        showMumbaiNetwork: false,
-        isDeadReckoning: liveState.deadReckoningActive,
-        isAlerting: activeJourney.journey_status === 'alerting',
-        interactivePinMode: false,
-        zoom: 12,
-      };
-    }
-
-    if (tab === 'add') {
-      return {
-        centerLat: pickedCoords.lat,
-        centerLng: pickedCoords.lng,
-        destLat: pickedCoords.lat,
-        destLng: pickedCoords.lng,
-        destName: 'Selected Pin',
-        alertRadiusKm: 1.5,
-        routeWaypoints: [],
-        showMumbaiNetwork: true,
-        isDeadReckoning: false,
-        isAlerting: false,
-        interactivePinMode: true,
-        zoom: 12,
-      };
-    }
-
-    const focusDest = selectedDestination || previewDestination || destinations[0];
-    return {
-      centerLat: focusDest?.latitude ?? 19.085,
-      centerLng: focusDest?.longitude ?? 72.91,
-      destLat: focusDest?.latitude,
-      destLng: focusDest?.longitude,
-      destName: focusDest?.destination_name,
-      alertRadiusKm: user.preferences.defaultAlertRadiusKm,
-      routeWaypoints: [],
-      showMumbaiNetwork: true,
-      isDeadReckoning: false,
-      isAlerting: false,
-      interactivePinMode: false,
-      zoom: 11,
-    };
-  }, [
-    activeJourney,
-    liveState,
-    tab,
-    pickedCoords,
-    selectedDestination,
-    previewDestination,
-    destinations,
-    user.preferences.defaultAlertRadiusKm,
-  ]);
-
   const navItems = [
-    { id: 'home' as const, label: 'Explore', icon: Home },
+    { id: 'home' as const, label: 'Home', icon: Home },
     { id: 'add' as const, label: 'Add Stop', icon: PlusCircle },
     { id: 'journey' as const, label: activeJourney ? 'Active' : 'Journey', icon: Compass },
     { id: 'settings' as const, label: 'Telemetry', icon: Settings },
   ];
 
   return (
-    <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#05070b] text-slate-100 lg:flex-row">
-      {/* ============================================================
-          PERSISTENT MAP STAGE (Top hero on Mobile, Left Split on Desktop)
-         ============================================================ */}
-      <div className="relative h-[37dvh] w-full shrink-0 lg:h-full lg:flex-1">
-        <LiveMap
-          {...mapProps}
-          savedDestinations={destinations}
-          onMapClick={
-            tab === 'add' ? (lat, lng) => setPickedCoords({ lat, lng }) : undefined
-          }
-          onSelectDestinationPin={(dest) => {
-            setPreviewDestination(dest);
-          }}
-          className="h-full w-full"
-        />
-
-        {/* Floating Top Brand + Signal Pill + Profile Pill */}
-        <div className="pointer-events-none absolute inset-x-3.5 top-3.5 z-30 flex items-center justify-between gap-2">
-          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-white/10 bg-[#0b101c]/90 py-1.5 pl-2 pr-3.5 shadow-xl backdrop-blur-xl">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-400 text-slate-950">
-              <Navigation className="h-3.5 w-3.5" />
+    <div className="min-h-dvh w-full bg-[#05070b] text-slate-100">
+      {/* Mobile-First App Frame (100% full screen on phones, clean 440px phone frame on desktop) */}
+      <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-[#070b14] md:border-x md:border-white/[0.08] md:shadow-2xl">
+        {/* Clean Mobile App Header */}
+        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/[0.07] bg-[#070b14]/92 px-4 py-3 backdrop-blur-xl">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20">
+              <Navigation className="h-4 w-4" />
             </span>
-            <span className="text-sm font-extrabold tracking-tight text-white">WakeMe</span>
-            <span className="h-3.5 w-px bg-white/15" />
-            {liveState?.deadReckoningActive ? (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-300">
-                <WifiOff className="h-3 w-3" />
-                Fallback
-              </span>
-            ) : activeJourney ? (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300">
-                <Radio className="h-3 w-3 animate-pulse" />
-                Armed
-              </span>
-            ) : (
-              <span className="text-xs font-medium text-slate-300">Mumbai Transit</span>
-            )}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-base font-extrabold tracking-tight text-white">WakeMe</span>
+                {liveState?.deadReckoningActive ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                    <WifiOff className="h-2.5 w-2.5" />
+                    Fallback
+                  </span>
+                ) : activeJourney ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                    <Radio className="h-2.5 w-2.5 animate-pulse" />
+                    Armed
+                  </span>
+                ) : null}
+              </div>
+              <p className="text-[11px] text-slate-400">Never Miss Your Destination</p>
+            </div>
           </div>
 
           <button
             type="button"
             onClick={() => setAuthModalOpen(true)}
-            className="pressable pointer-events-auto flex items-center gap-2 rounded-full border border-white/10 bg-[#0b101c]/90 px-3 py-1.5 text-xs font-semibold text-slate-200 shadow-xl backdrop-blur-xl hover:border-cyan-400/40"
+            className="pressable flex items-center gap-1.5 rounded-full border border-white/10 bg-[#0e1524] px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400/40"
           >
             <User className="h-3.5 w-3.5 text-cyan-300" />
-            <span className="max-w-[96px] truncate">{user.name.split(' ')[0]}</span>
+            <span className="max-w-[84px] truncate">{user.name.split(' ')[0]}</span>
           </button>
-        </div>
+        </header>
 
-        {/* Desktop Map Bottom Legend (hidden on small screens so bottom sheet overlaps cleanly) */}
-        {!activeJourney && (
-          <div className="pointer-events-none absolute bottom-4 left-4 z-20 hidden items-center gap-2 rounded-full border border-white/10 bg-[#0b101c]/88 px-3.5 py-2 text-xs shadow-xl backdrop-blur-xl lg:inline-flex">
-            <span className="inline-flex items-center gap-1.5 text-slate-300">
-              <span className="h-2 w-2 rounded-full bg-amber-400" />
-              Central
-            </span>
-            <span className="h-3 w-px bg-white/10" />
-            <span className="inline-flex items-center gap-1.5 text-slate-300">
-              <span className="h-2 w-2 rounded-full bg-sky-400" />
-              Western
-            </span>
-            <span className="h-3 w-px bg-white/10" />
-            <span className="inline-flex items-center gap-1.5 text-slate-300">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              Harbour
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* ============================================================
-          COMMUTER CONTROL SHEET (Bottom Sheet on Mobile, Docked Rail on Desktop)
-         ============================================================ */}
-      <aside className="relative z-30 -mt-5 flex min-h-0 flex-1 flex-col rounded-t-[26px] border-t border-white/10 bg-[#080c16]/95 shadow-[0_-14px_40px_rgba(0,0,0,0.65)] backdrop-blur-2xl lg:mt-0 lg:w-[440px] lg:shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:bg-[#080c16] lg:shadow-none xl:w-[468px]">
-        {/* Mobile Grabber Pill */}
-        <div className="flex justify-center pb-1 pt-2.5 lg:hidden">
-          <span className="h-1 w-10 rounded-full bg-white/20" />
-        </div>
-
-        {/* Scrollable Content Region */}
-        <main className="clean-scroll flex-1 overflow-y-auto px-4 pb-6 pt-2 lg:px-6 lg:pt-6">
+        {/* Scrollable Screen Content */}
+        <main className="flex-1 px-4 pb-24 pt-4">
           {tab === 'home' && (
             <HomeScreen
               destinations={destinations}
               hasActiveJourney={Boolean(activeJourney)}
-              previewDestinationId={previewDestination?.destination_id}
               onGoToAdd={() => setTab('add')}
-              onPreviewDestination={(dest) => setPreviewDestination(dest)}
               onStartWithDestination={(dest) => {
                 setSelectedDestination(dest);
                 setSelectedPresetRoute(null);
-                setPreviewDestination(dest);
                 setTab('journey');
               }}
               onStartPresetRoute={(route) => {
@@ -844,9 +705,6 @@ export function App() {
           {tab === 'add' && (
             <AddDestinationScreen
               userId={user.user_id}
-              pickedLat={pickedCoords.lat}
-              pickedLng={pickedCoords.lng}
-              onUpdatePickedCoords={(lat, lng) => setPickedCoords({ lat, lng })}
               onBack={() => setTab('home')}
               onSaveDestination={handleSaveNewDestination}
             />
@@ -907,8 +765,8 @@ export function App() {
           )}
         </main>
 
-        {/* Bottom Dock Navigation (Docked cleanly at bottom of sheet/rail) */}
-        <nav className="shrink-0 border-t border-white/[0.08] bg-[#070b14]/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl">
+        {/* Fixed Mobile Bottom Navigation */}
+        <nav className="fixed bottom-0 left-1/2 z-40 w-full max-w-[440px] -translate-x-1/2 border-t border-white/[0.08] bg-[#070b14]/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl">
           <div className="grid grid-cols-4 gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -934,7 +792,7 @@ export function App() {
             })}
           </div>
         </nav>
-      </aside>
+      </div>
 
       {/* Account Modal */}
       <AuthModal

@@ -2,7 +2,14 @@ export type AlertLanguage = 'en' | 'hi' | 'mr';
 
 export type DestinationCategory = 'Home' | 'College' | 'Office' | 'Station' | 'Custom';
 
-export type MumbaiLine = 'Western' | 'Central' | 'Harbour' | 'Metro / Bus' | 'Custom';
+export type MumbaiLine =
+  | 'Express'
+  | 'Bus'
+  | 'Western'
+  | 'Central'
+  | 'Harbour'
+  | 'Metro / Bus'
+  | 'Custom';
 
 export type PollingZone = 'ZONE_1_ECO' | 'ZONE_2_BALANCED' | 'ZONE_3_HIGH';
 
@@ -25,7 +32,7 @@ export interface UserPreferences {
   voiceLanguage: AlertLanguage;
   repeatAlertEnabled: boolean;
   repeatIntervalSec: number;
-  alarmVolume: number; // 0.2 to 1.0
+  alarmVolume: number;
   stopBufferMinutesPerStop: number;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
@@ -34,7 +41,7 @@ export interface UserPreferences {
 export interface UserProfile {
   user_id: string;
   name: string;
-  contact: string; // email or mobile
+  contact: string;
   isGuest: boolean;
   preferences: UserPreferences;
 }
@@ -74,7 +81,7 @@ export interface JourneyRecord {
   end_time?: string;
   journey_status: JourneyStatus;
   alert_status: AlertStatus;
-  configured_alert_distance: number; // km
+  configured_alert_distance: number;
   expected_stops_remaining: number;
   mode: 'live_gps' | 'simulator';
   route_id?: string;
@@ -88,7 +95,7 @@ export interface MumbaiStation {
   id: string;
   name: string;
   code: string;
-  line: 'Western' | 'Central' | 'Harbour';
+  line: 'Express' | 'Bus' | 'Western' | 'Central' | 'Harbour';
   lat: number;
   lng: number;
   isMajor: boolean;
@@ -97,11 +104,13 @@ export interface MumbaiStation {
 export interface MumbaiPresetRoute {
   id: string;
   title: string;
-  line: 'Western' | 'Central' | 'Harbour';
-  trainType: 'Fast' | 'Slow';
+  scope: 'long_distance' | 'local';
+  line: 'Express' | 'Bus' | 'Western' | 'Central' | 'Harbour';
+  trainType: 'Superfast' | 'Sleeper Bus' | 'Fast' | 'Slow';
   avgSpeedKmh: number;
   stationIds: string[];
   defaultAlertKm: number;
+  highlightNote?: string;
 }
 
 export interface LiveTrackingState {
@@ -114,7 +123,6 @@ export interface LiveTrackingState {
   pollingZone: PollingZone;
   pollIntervalSec: number;
   connectionHealth: ConnectionHealth;
-  // Dead-reckoning snapshot when signal drops
   deadReckoningActive: boolean;
   drSnapshotDistanceKm: number | null;
   drSnapshotSpeedKmh: number | null;
@@ -125,8 +133,8 @@ export interface LiveTrackingState {
   consecutiveHitsInRadius: number;
   gpsChecksPerformed: number;
   staticBaselineChecks: number;
-  simProgress: number; // 0..1 when in simulator mode
-  simSpeedMultiplier: number; // 1, 5, 15, 30
+  simProgress: number;
+  simSpeedMultiplier: number;
   nextStationName: string | null;
   remainingStopsCount: number;
 }

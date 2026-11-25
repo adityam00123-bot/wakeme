@@ -8,14 +8,14 @@ import {
 } from '../types/wakeme';
 
 const KEYS = {
-  USER: 'wakeme_user_v1',
-  DESTINATIONS: 'wakeme_destinations_v1',
-  JOURNEYS: 'wakeme_journeys_v1',
-  LOGS: 'wakeme_telemetry_logs_v1',
+  USER: 'wakeme_user_v2',
+  DESTINATIONS: 'wakeme_destinations_v2',
+  JOURNEYS: 'wakeme_journeys_v2',
+  LOGS: 'wakeme_telemetry_logs_v2',
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
-  defaultAlertRadiusKm: 2.0,
+  defaultAlertRadiusKm: 5.0,
   soundEnabled: true,
   vibrationEnabled: true,
   voiceAlertEnabled: true,
@@ -23,7 +23,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   repeatAlertEnabled: true,
   repeatIntervalSec: 20,
   alarmVolume: 1.0,
-  stopBufferMinutesPerStop: 1.5,
+  stopBufferMinutesPerStop: 2.0,
   supabaseUrl: '',
   supabaseAnonKey: '',
 };
@@ -31,7 +31,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
 export const DEFAULT_USER: UserProfile = {
   user_id: 'guest-commuter',
   name: 'Aavishkar Commuter',
-  contact: 'Mumbai Local Demo',
+  contact: 'Long-Distance & Local',
   isGuest: true,
   preferences: DEFAULT_PREFERENCES,
 };
@@ -99,11 +99,6 @@ export function saveTelemetryLogs(logs: TelemetryLogEntry[]): void {
   safeWrite(KEYS.LOGS, logs.slice(0, 80));
 }
 
-/**
- * Optional Supabase REST push (non-blocking).
- * If user provides Supabase URL + Anon Key in Settings, syncs destination/journey rows;
- * otherwise operates 100% offline with zero network dependency.
- */
 export async function syncRecordToSupabase(
   table: 'destinations' | 'journeys',
   payload: Record<string, unknown>,

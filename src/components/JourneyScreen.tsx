@@ -27,6 +27,7 @@ import {
   MumbaiPresetRoute,
   UserPreferences,
 } from '../types/wakeme';
+import { LiveMap } from './LiveMap';
 
 export interface StartJourneyConfig {
   mode: 'live_gps' | 'simulator';
@@ -88,7 +89,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   const [alertRadiusKm, setAlertRadiusKm] = useState<number>(
     selectedPresetRoute?.defaultAlertKm || preferences.defaultAlertRadiusKm
   );
-  const [expectedStops, setExpectedStops] = useState<number>(3);
+  const [expectedStops, setExpectedStops] = useState<number>(4);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [capturedGps, setCapturedGps] = useState<{ lat: number; lng: number } | null>(null);
@@ -103,6 +104,8 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
     } else if (selectedDestination) {
       setDestId(selectedDestination.destination_id);
       setSimSourceType('custom');
+      const isLong = selectedDestination.line === 'Express' || selectedDestination.line === 'Bus';
+      setAlertRadiusKm(isLong ? 5.0 : 2.0);
     }
   }, [selectedDestination, selectedPresetRoute]);
 
@@ -185,7 +188,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
         const syntheticDest: Destination = {
           destination_id: `route-dest-${endSt.id}`,
           user_id: chosenDest.user_id,
-          destination_name: `${endSt.name} (${preset.line})`,
+          destination_name: `${endSt.name}`,
           subtitle: preset.title,
           category: 'Station',
           line: preset.line,
@@ -225,7 +228,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
     onStartJourney({
       mode: 'live_gps',
       destination: chosenDest,
-      startName: capturedGps ? 'Current Device GPS' : 'Mumbai (Acquiring GPS)',
+      startName: capturedGps ? 'Current Device GPS' : 'Current Location',
       startLat,
       startLng,
       alertRadiusKm,
@@ -234,7 +237,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   };
 
   // ==============================================================
-  // ACTIVE JOURNEY LIVE HUD
+  // ACTIVE JOURNEY LIVE RADAR VIEW (With OpenFreeMap Vector Map!)
   // ==============================================================
   if (activeJourney && liveState) {
     const batterySaved =
@@ -256,7 +259,6 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
         ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200'
         : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200';
 
-    // Determine visible stepper stops slice
     const totalStops = activeRouteWaypoints.length;
     const currentStopIdx =
       totalStops > 1
@@ -265,16 +267,16 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
 
     return (
       <div className="space-y-4">
-        {/* Route Heading & Polling Zone */}
+        {/* Heading & Zone */}
         <header className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
               <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>{activeJourney.mode === 'simulator' ? 'Mumbai Local Sim' : 'Live GPS'}</span>
+              <span>{activeJourney.mode === 'simulator' ? 'Transit Simulator' : 'Live GPS'}</span>
               <span>·</span>
-              <span>Alert at {activeJourney.configured_alert_distance.toFixed(1)} km</span>
+              <span>Alert @ {activeJourney.configured_alert_distance.toFixed(1)} km</span>
             </div>
-            <h1 className="mt-1 truncate text-lg font-bold tracking-[-0.02em] text-white">
+            <h1 className="mt-0.5 truncate text-lg font-bold tracking-[-0.02em] text-white">
               {activeJourney.start_location_name} to {activeJourney.destination_name}
             </h1>
           </div>
@@ -288,7 +290,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </span>
         </header>
 
-        {/* Connection Health / Dead-Reckoning Fallback Strip */}
+        {/* Connection / Dead-Reckoning Fallback Strip */}
         {liveState.deadReckoningActive ? (
           <div className="rounded-2xl border border-amber-400/45 bg-amber-500/15 p-3.5">
             <div className="flex items-center justify-between gap-3">
@@ -299,7 +301,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                     Signal Lost — Dead-Reckoning Active
                   </p>
                   <p className="mt-0.5 text-xs text-amber-100/85">
-                    Locked at {liveState.drSnapshotDistanceKm?.toFixed(2)} km ·{' '}
+                    Locked @ {liveState.drSnapshotDistanceKm?.toFixed(2)} km ·{' '}
                     {Math.round(liveState.drSnapshotSpeedKmh || 0)} km/h ·{' '}
                     {liveState.drStopsBufferCount} stops buffer
                   </p>
@@ -328,12 +330,29 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </div>
         )}
 
+        {/* OpenFreeMap Dark Vector Live Route Map */}
+        <LiveMap
+          centerLat={liveState.currentLat}
+          centerLng={liveState.currentLng}
+          userLat={liveState.currentLat}
+          userLng={liveState.currentLng}
+          destLat={activeJourney.destination_lat}
+          destLng={activeJourney.destination_lng}
+          destName={activeJourney.destination_name}
+          alertRadiusKm={activeJourney.configured_alert_distance}
+          routeWaypoints={activeRouteWaypoints}
+          isDeadReckoning={liveState.deadReckoningActive}
+          isAlerting={activeJourney.journey_status === 'alerting'}
+          className="h-52 w-full"
+          zoom={9}
+        />
+
         {/* Unified Telemetry Strip */}
         <div className="grid grid-cols-3 divide-x divide-white/[0.07] rounded-2xl border border-white/[0.08] bg-[#0e1524]">
           <div className="p-3.5">
             <p className="text-[11px] font-medium text-slate-400">Distance</p>
             <p className="font-mono-num mt-1 text-xl font-bold text-white">
-              {liveState.distanceKm.toFixed(2)}
+              {liveState.distanceKm.toFixed(1)}
               <span className="ml-1 text-xs font-medium text-slate-400">km</span>
             </p>
           </div>
@@ -347,12 +366,12 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           <div className="p-3.5">
             <p className="text-[11px] font-medium text-slate-400">ETA</p>
             <p className="font-mono-num mt-1 text-xl font-bold text-cyan-300">
-              {liveState.etaMinutes !== null ? `${liveState.etaMinutes}m` : '--'}
+              {liveState.etaMinutes !== null ? formatDurationCompact(liveState.etaMinutes * 60) : '--'}
             </p>
           </div>
         </div>
 
-        {/* Mumbai Local Live Route Stepper */}
+        {/* Live Route Station Stepper */}
         {activeRouteWaypoints.length >= 2 && (
           <div className="rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
             <div className="mb-3 flex items-center justify-between text-xs">
@@ -360,7 +379,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                 <TrainFront className="h-4 w-4 text-cyan-300" />
                 Next: {liveState.nextStationName || activeJourney.destination_name}
               </span>
-              <span className="inline-flex items-center gap-1 text-emerald-300 font-semibold">
+              <span className="inline-flex items-center gap-1 font-semibold text-emerald-300">
                 <BatteryCharging className="h-3.5 w-3.5" />
                 {batterySaved}% saved
               </span>
@@ -386,7 +405,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                         }`}
                       />
                       <span
-                        className={`max-w-[74px] truncate text-[10px] font-medium ${
+                        className={`max-w-[78px] truncate text-[10px] font-medium ${
                           isLast
                             ? 'font-bold text-cyan-300'
                             : isCurrent
@@ -424,7 +443,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           <input
             type="range"
             min={0.5}
-            max={10}
+            max={15}
             step={0.5}
             value={activeJourney.configured_alert_distance}
             onChange={(e) => onUpdateAlertRadius(Number(e.target.value))}
@@ -456,7 +475,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-slate-400">Sim speed</span>
                   <div className="flex gap-1.5">
-                    {[1, 5, 15, 30].map((spd) => (
+                    {[1, 10, 30, 60].map((spd) => (
                       <button
                         key={spd}
                         type="button"
@@ -553,11 +572,11 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   // PRE-JOURNEY CONFIGURATION VIEW
   // ==============================================================
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <header>
         <h1 className="text-xl font-bold tracking-[-0.025em] text-white">Configure journey</h1>
         <p className="mt-1 text-xs text-slate-400">
-          Run the Mumbai Local simulator indoors for demos, or arm live phone GPS outdoors.
+          Pick a Long-Distance Express/Bus or Mumbai Local route to test, or arm Live Phone GPS.
         </p>
       </header>
 
@@ -567,21 +586,17 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           type="button"
           onClick={() => setMode('simulator')}
           className={`pressable flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold ${
-            mode === 'simulator'
-              ? 'bg-cyan-400 text-slate-950'
-              : 'text-slate-300 hover:text-white'
+            mode === 'simulator' ? 'bg-cyan-400 text-slate-950' : 'text-slate-300 hover:text-white'
           }`}
         >
           <TrainFront className="h-4 w-4" />
-          Mumbai Simulator
+          Route Simulator
         </button>
         <button
           type="button"
           onClick={() => setMode('live_gps')}
           className={`pressable flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold ${
-            mode === 'live_gps'
-              ? 'bg-emerald-400 text-slate-950'
-              : 'text-slate-300 hover:text-white'
+            mode === 'live_gps' ? 'bg-emerald-400 text-slate-950' : 'text-slate-300 hover:text-white'
           }`}
         >
           <Satellite className="h-4 w-4" />
@@ -601,7 +616,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                   simSourceType === 'preset' ? 'bg-[#141e33] text-cyan-300' : 'text-slate-400'
                 }`}
               >
-                Local Corridor
+                Preset Corridors
               </button>
               <button
                 type="button"
@@ -617,25 +632,39 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
             {simSourceType === 'preset' ? (
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                  Mumbai Local corridor
+                  Long-Distance &amp; Mumbai Local routes
                 </label>
                 <select
                   value={routeId}
-                  onChange={(e) => setRouteId(e.target.value)}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    setRouteId(nextId);
+                    const found = MUMBAI_PRESET_ROUTES.find((r) => r.id === nextId);
+                    if (found) setAlertRadiusKm(found.defaultAlertKm);
+                  }}
                   className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3.5 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
                 >
-                  {MUMBAI_PRESET_ROUTES.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.title} (~{r.avgSpeedKmh} km/h)
-                    </option>
-                  ))}
+                  <optgroup label="Long-Distance Trains & Overnight Buses">
+                    {MUMBAI_PRESET_ROUTES.filter((r) => r.scope === 'long_distance').map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.title} (~{r.avgSpeedKmh} km/h)
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Mumbai Local Corridors">
+                    {MUMBAI_PRESET_ROUTES.filter((r) => r.scope === 'local').map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.title} (~{r.avgSpeedKmh} km/h)
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                    Starting station
+                    Starting stop
                   </label>
                   <select
                     value={originStationId}
@@ -724,12 +753,17 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           <input
             type="range"
             min={0.5}
-            max={10}
+            max={15}
             step={0.5}
             value={alertRadiusKm}
             onChange={(e) => setAlertRadiusKm(Number(e.target.value))}
             className="w-full accent-cyan-400"
           />
+          <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+            <span>1–2 km (Local)</span>
+            <span>5–8 km (Express / Bus)</span>
+            <span>15 km (Early)</span>
+          </div>
         </div>
 
         {/* Dead-Reckoning Buffer */}
@@ -743,20 +777,20 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           <input
             type="range"
             min={0}
-            max={8}
+            max={10}
             step={1}
             value={expectedStops}
             onChange={(e) => setExpectedStops(Number(e.target.value))}
             className="w-full accent-amber-400"
           />
           <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-            Used for Dead-Reckoning ETA fallback if internet or GPS drops mid-journey.
+            Essential for Ghat tunnels &amp; rural highways: computes fallback ETA if signal drops.
           </p>
         </div>
 
         {previewDistKm !== null && (
           <div className="flex items-center justify-between rounded-xl bg-[#05070b] px-3.5 py-2.5 text-xs">
-            <span className="text-slate-400">Estimated corridor distance</span>
+            <span className="text-slate-400">Estimated route distance</span>
             <span className="font-mono-num font-bold text-white">{previewDistKm.toFixed(1)} km</span>
           </div>
         )}

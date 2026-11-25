@@ -3,21 +3,16 @@ import { ArrowLeft, Check, Loader2, MapPin, Search, Star, WifiOff } from 'lucide
 import { MUMBAI_STATIONS } from '../data/mumbaiLocal';
 import { SearchPlaceResult, searchPlacesHybrid } from '../services/geoEngine';
 import { Destination, DestinationCategory, MumbaiLine } from '../types/wakeme';
+import { LiveMap } from './LiveMap';
 
 interface AddDestinationScreenProps {
   userId: string;
-  pickedLat: number;
-  pickedLng: number;
-  onUpdatePickedCoords: (lat: number, lng: number) => void;
   onBack: () => void;
   onSaveDestination: (dest: Destination, startImmediately: boolean) => void;
 }
 
 export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   userId,
-  pickedLat,
-  pickedLng,
-  onUpdatePickedCoords,
   onBack,
   onSaveDestination,
 }) => {
@@ -28,7 +23,9 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   const [name, setName] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [category, setCategory] = useState<DestinationCategory>('Station');
-  const [line, setLine] = useState<MumbaiLine>('Central');
+  const [line, setLine] = useState<MumbaiLine>('Express');
+  const [lat, setLat] = useState(18.5289); // Pune Junction default
+  const [lng, setLng] = useState(73.8744);
   const [favourite, setFavourite] = useState(true);
 
   useEffect(() => {
@@ -36,14 +33,14 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
     if (!trimmed) {
       setResults(
         MUMBAI_STATIONS.filter((s) => s.isMajor)
-          .slice(0, 6)
+          .slice(0, 8)
           .map((s) => ({
             id: s.id,
             name: s.name,
-            subtitle: `${s.line} Line (${s.code}) · Offline Ready`,
+            subtitle: `${s.line} (${s.code}) · Offline Ready`,
             lat: s.lat,
             lng: s.lng,
-            source: 'Mumbai Local (Offline)',
+            source: 'Offline Junction DB',
             line: s.line,
           }))
       );
@@ -63,9 +60,19 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   const handleSelectResult = (item: SearchPlaceResult) => {
     setName(item.name);
     setSubtitle(item.subtitle);
-    onUpdatePickedCoords(item.lat, item.lng);
+    setLat(item.lat);
+    setLng(item.lng);
     if (item.line) setLine(item.line);
-    setCategory(item.source.includes('Mumbai Local') ? 'Station' : 'Custom');
+    setCategory(item.source === 'Offline Junction DB' ? 'Station' : 'Custom');
+  };
+
+  const handleMapTap = (pickedLat: number, pickedLng: number) => {
+    setLat(pickedLat);
+    setLng(pickedLng);
+    if (!name.trim()) {
+      setName('Pinned Stop');
+    }
+    setSubtitle(`Custom Pin (${pickedLat.toFixed(4)}, ${pickedLng.toFixed(4)})`);
   };
 
   const handleSave = (startImmediately: boolean) => {
@@ -77,8 +84,8 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
       subtitle: subtitle.trim() || `${line} · ${category}`,
       category,
       line,
-      latitude: pickedLat,
-      longitude: pickedLng,
+      latitude: lat,
+      longitude: lng,
       favourite_status: favourite,
       created_at: new Date().toISOString(),
       last_used_at: startImmediately ? new Date().toISOString() : undefined,
@@ -87,7 +94,7 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <button
@@ -100,7 +107,7 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
           </button>
           <div>
             <h1 className="text-lg font-bold tracking-[-0.02em] text-white">Add destination</h1>
-            <p className="text-xs text-slate-400">Search Mumbai stations or tap the map</p>
+            <p className="text-xs text-slate-400">Search any city/station or tap the map</p>
           </div>
         </div>
         <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-[#0e1524] px-2.5 py-1 text-[11px] font-medium text-slate-300">
@@ -116,15 +123,15 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search Borivali, Dadar, Thane, or landmark…"
-          className="w-full rounded-2xl border border-white/10 bg-[#11192b] py-3 pl-11 pr-10 text-base text-white placeholder-slate-400 outline-none focus:border-cyan-400/60 sm:text-sm"
+          placeholder="Search Pune, Surat, Goa, Borivali, Dadar…"
+          className="w-full rounded-2xl border border-white/10 bg-[#0e1524] py-3 pl-11 pr-10 text-base text-white placeholder-slate-400 outline-none focus:border-cyan-400/60 sm:text-sm"
         />
         {searching && <Loader2 className="absolute right-4 h-4 w-4 animate-spin text-cyan-400" />}
       </div>
 
-      {/* Station / Place Results */}
+      {/* Results List */}
       {results.length > 0 && (
-        <div className="clean-scroll max-h-44 divide-y divide-white/[0.06] overflow-y-auto rounded-2xl border border-white/[0.08] bg-[#0e1524]">
+        <div className="clean-scroll max-h-40 divide-y divide-white/[0.06] overflow-y-auto rounded-2xl border border-white/[0.08] bg-[#0e1524]">
           {results.map((item) => (
             <button
               key={item.id}
@@ -137,19 +144,33 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
                 <p className="truncate text-xs text-slate-400">{item.subtitle}</p>
               </div>
               <span className="shrink-0 rounded-md border border-white/10 bg-[#05070b] px-2 py-0.5 text-[11px] font-medium text-cyan-300">
-                {item.source === 'Mumbai Local (Offline)' ? 'Station' : 'OSM'}
+                {item.source === 'Offline Junction DB' ? 'Station' : 'OSM'}
               </span>
             </button>
           ))}
         </div>
       )}
 
-      {/* Coordinates & Form */}
-      <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
+      {/* MapLibre OpenFreeMap Dark Interactive Pin Picker */}
+      <LiveMap
+        centerLat={lat}
+        centerLng={lng}
+        destLat={lat}
+        destLng={lng}
+        destName={name || 'Selected Pin'}
+        alertRadiusKm={2.0}
+        interactivePinMode
+        onMapClick={handleMapTap}
+        className="h-52 w-full"
+        zoom={11}
+      />
+
+      {/* Details Form */}
+      <div className="space-y-3.5 rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
         <div className="flex items-center justify-between">
           <span className="font-mono-num inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
             <MapPin className="h-3.5 w-3.5" />
-            {pickedLat.toFixed(5)}, {pickedLng.toFixed(5)}
+            {lat.toFixed(5)}, {lng.toFixed(5)}
           </span>
           <button
             type="button"
@@ -171,7 +192,7 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g., Dadar Junction or VJTI College"
+            placeholder="e.g., Pune Junction or Dadar Station"
             className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3.5 py-2.5 text-base text-white outline-none focus:border-cyan-400/60 sm:text-sm"
           />
         </div>
@@ -198,10 +219,11 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
               onChange={(e) => setLine(e.target.value as MumbaiLine)}
               className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
             >
-              <option value="Central">Central</option>
-              <option value="Western">Western</option>
-              <option value="Harbour">Harbour</option>
-              <option value="Metro / Bus">Metro / Bus</option>
+              <option value="Express">Express Train</option>
+              <option value="Bus">Intercity Bus</option>
+              <option value="Central">Central Local</option>
+              <option value="Western">Western Local</option>
+              <option value="Harbour">Harbour Local</option>
               <option value="Custom">Custom</option>
             </select>
           </div>
