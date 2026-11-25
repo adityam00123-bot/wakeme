@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { Haptics } from '@capacitor/haptics';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { AlertLanguage, UserPreferences } from '../types/wakeme';
 
 function encodeWavDataUrl(samples: Float32Array, sampleRate = 8000): string {
@@ -77,6 +78,7 @@ class WakeMeAlertEngine {
   private wakeLockSentinel: WakeLockSentinel | null = null;
   private keepAliveActive = false;
   private active = false;
+  private nativeNotifPermission: NotificationPermission = 'default';
   private silentWavUrl: string | null = null;
   private alarmWavUrl: string | null = null;
 
@@ -195,6 +197,20 @@ class WakeMeAlertEngine {
   }
 
   public async requestNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const cur = await LocalNotifications.checkPermissions();
+        if (cur.display === 'granted') {
+          this.nativeNotifPermission = 'granted';
+          return 'granted';
+        }
+        const req = await LocalNotifications.requestPermissions();
+        this.nativeNotifPermission = req.display === 'granted' ? 'granted' : 'denied';
+        return this.nativeNotifPermission;
+      } catch {
+        return 'denied';
+      }
+    }
     if (!('Notification' in window)) return 'unsupported';
     if (Notification.permission === 'granted') return 'granted';
     try {
@@ -264,6 +280,19 @@ class WakeMeAlertEngine {
   }
 
   public sendSystemNotification(title: string, body: string): void {
+    if (Capacitor.isNativePlatform()) {
+      void LocalNotifications.schedule({
+        notifications: [
+          {
+            id: 1001,
+            title,
+            body,
+            schedule: { at: new Date(Date.now() + 120) },
+          },
+        ],
+      }).catch(() => {});
+      return;
+    }
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     try {
       const vibrate = [700, 180, 700, 180, 900];
@@ -383,10 +412,11 @@ class WakeMeAlertEngine {
       mediaSessionSupported: typeof navigator !== 'undefined' && 'mediaSession' in navigator,
       speechSynthesisSupported: typeof window !== 'undefined' && 'speechSynthesis' in window,
       voicesCount,
-      notificationPermission:
-        typeof window !== 'undefined' && 'Notification' in window
-          ? Notification.permission
-          : ('unsupported' as const),
+      notificationPermission: Capacitor.isNativePlatform()
+        ? this.nativeNotifPermission
+        : typeof window !== 'undefined' && 'Notification' in window
+        ? Notification.permission
+        : ('unsupported' as const),
     };
   }
 
