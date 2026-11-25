@@ -1,28 +1,28 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ArrowRight,
   Briefcase,
   ChevronRight,
   Edit3,
   GraduationCap,
   Home,
   MapPin,
-  Navigation,
   Plus,
+  Radio,
   Search,
   Star,
   TrainFront,
   Trash2,
-  User,
 } from 'lucide-react';
 import { MUMBAI_PRESET_ROUTES, getStationById } from '../data/mumbaiLocal';
-import { Destination, DestinationCategory, MumbaiPresetRoute, UserProfile } from '../types/wakeme';
+import { Destination, DestinationCategory, MumbaiPresetRoute } from '../types/wakeme';
 
 interface HomeScreenProps {
-  user: UserProfile;
   destinations: Destination[];
   hasActiveJourney: boolean;
-  onOpenAuth: () => void;
+  previewDestinationId?: string | null;
   onGoToAdd: () => void;
+  onPreviewDestination: (dest: Destination) => void;
   onStartWithDestination: (dest: Destination) => void;
   onStartPresetRoute: (route: MumbaiPresetRoute) => void;
   onResumeJourney: () => void;
@@ -46,12 +46,19 @@ function getCategoryIcon(cat: DestinationCategory) {
   }
 }
 
+function getLineTag(line: string) {
+  if (line === 'Western') return { code: 'WR', cls: 'bg-sky-500/15 text-sky-300 border-sky-400/30' };
+  if (line === 'Central') return { code: 'CR', cls: 'bg-amber-500/15 text-amber-300 border-amber-400/30' };
+  if (line === 'Harbour') return { code: 'HB', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' };
+  return { code: 'LOC', cls: 'bg-cyan-500/15 text-cyan-300 border-cyan-400/30' };
+}
+
 export const HomeScreen: React.FC<HomeScreenProps> = ({
-  user,
   destinations,
   hasActiveJourney,
-  onOpenAuth,
+  previewDestinationId,
   onGoToAdd,
+  onPreviewDestination,
   onStartWithDestination,
   onStartPresetRoute,
   onResumeJourney,
@@ -63,6 +70,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [filter, setFilter] = useState<'All' | 'Favourites' | 'Central' | 'Western' | 'Harbour'>('All');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+
+  const quickShortcuts = useMemo(
+    () =>
+      [...destinations]
+        .sort((a, b) => Number(b.favourite_status) - Number(a.favourite_status))
+        .slice(0, 4),
+    [destinations]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -81,138 +96,144 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   }, [destinations, search, filter]);
 
   return (
-    <div className="space-y-5 pb-28">
-      {/* Top App Bar */}
-      <header className="flex items-center justify-between pt-1">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 text-slate-950 shadow-lg shadow-cyan-500/20">
-            <Navigation className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-extrabold tracking-tight text-white">WakeMe</h1>
-              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
-                Mumbai Local
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400">Never Miss Your Destination</p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={onOpenAuth}
-          className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-cyan-500/40"
-        >
-          <User className="h-3.5 w-3.5 text-cyan-400" />
-          <span className="max-w-[92px] truncate">{user.name.split(' ')[0]}</span>
-        </button>
-      </header>
-
-      {/* Active Journey Return Banner */}
+    <div className="space-y-6">
+      {/* Live Journey Resume Strip */}
       {hasActiveJourney && (
         <button
           type="button"
           onClick={onResumeJourney}
-          className="flex w-full items-center justify-between rounded-2xl border border-emerald-500/40 bg-emerald-500/15 p-3.5 text-left transition active:scale-[0.99]"
+          className="pressable flex w-full items-center justify-between rounded-2xl border border-emerald-400/35 bg-emerald-500/15 px-4 py-3 text-left"
         >
           <div className="flex items-center gap-3">
-            <span className="relative flex h-3 w-3">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-400" />
-            </span>
+            <Radio className="h-4 w-4 animate-pulse text-emerald-400" />
             <div>
-              <p className="text-xs font-bold text-emerald-300">Journey Monitoring Active</p>
-              <p className="text-[11px] text-emerald-100/80">Tap to open live radar & fallback monitor</p>
+              <p className="text-sm font-semibold text-emerald-200">WakeMe is monitoring your stop</p>
+              <p className="text-xs text-emerald-300/80">Open live radar &amp; fallback timer</p>
             </div>
           </div>
           <ChevronRight className="h-4 w-4 text-emerald-300" />
         </button>
       )}
 
-      {/* Quick Mumbai Local Demo Routes */}
-      <section>
-        <div className="mb-2.5 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            1-Tap Mumbai Local Corridors
-          </h2>
-          <span className="text-[11px] font-medium text-cyan-400">Offline Ready</span>
+      {/* Conversational Destination Prompt (Citymapper / Uber Pattern) */}
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h1 className="text-xl font-bold tracking-[-0.025em] text-white">
+            Where are you getting off?
+          </h1>
+          <button
+            type="button"
+            onClick={onGoToAdd}
+            className="pressable inline-flex items-center gap-1 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-400/20"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Drop pin
+          </button>
         </div>
 
-        <div className="no-scrollbar flex gap-2.5 overflow-x-auto pb-1">
+        <div className="relative flex items-center">
+          <Search className="pointer-events-none absolute left-4 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter saved stops or search stations…"
+            className="w-full rounded-2xl border border-white/10 bg-[#11192b] py-3.5 pl-11 pr-4 text-base text-white placeholder-slate-400 outline-none transition-colors focus:border-cyan-400/60 sm:text-sm"
+          />
+        </div>
+
+        {/* 1-Tap Quick Commute Shortcuts */}
+        {quickShortcuts.length > 0 && (
+          <div className="grid grid-cols-4 gap-2 pt-1">
+            {quickShortcuts.map((dest) => {
+              const Icon = getCategoryIcon(dest.category);
+              const shortLabel = dest.destination_name.split(' ')[0];
+              const isSelected = previewDestinationId === dest.destination_id;
+              return (
+                <button
+                  key={dest.destination_id}
+                  type="button"
+                  onClick={() => onStartWithDestination(dest)}
+                  onMouseEnter={() => onPreviewDestination(dest)}
+                  className={`pressable flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-2xl border px-2 py-2.5 text-center ${
+                    isSelected
+                      ? 'border-cyan-400/50 bg-cyan-400/12 text-white'
+                      : 'border-white/[0.07] bg-[#0e1524] text-slate-200 hover:border-white/15 hover:bg-[#131d31]'
+                  }`}
+                >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/[0.06] text-cyan-300">
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <span className="w-full truncate text-xs font-semibold">{shortLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Mumbai Local Live Corridors */}
+      <section className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold tracking-[-0.01em] text-slate-200">
+            Mumbai Local corridors
+          </h2>
+          <span className="text-xs text-slate-400">Instant demo routes</span>
+        </div>
+
+        <div className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e1524]">
           {MUMBAI_PRESET_ROUTES.map((route) => {
             const first = getStationById(route.stationIds[0]);
             const last = getStationById(route.stationIds[route.stationIds.length - 1]);
-            const lineAccent =
-              route.line === 'Western'
-                ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
-                : route.line === 'Central'
-                ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+            const badge = getLineTag(route.line);
 
             return (
               <button
                 key={route.id}
                 type="button"
                 onClick={() => onStartPresetRoute(route)}
-                className="min-w-[235px] shrink-0 rounded-2xl border border-slate-800/90 bg-slate-900/80 p-3.5 text-left transition hover:border-cyan-500/40 active:scale-[0.98]"
+                className="pressable flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-white/[0.03]"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${lineAccent}`}>
-                    {route.line} • {route.trainType}
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border text-xs font-bold ${badge.cls}`}
+                  >
+                    {badge.code}
                   </span>
-                  <span className="font-mono-num text-[11px] text-slate-400">
-                    ~{route.avgSpeedKmh} km/h
-                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{route.title}</p>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      {first?.code} to {last?.code} · {route.stationIds.length} stops ·{' '}
+                      <span className="tabular-nums">{route.avgSpeedKmh} km/h</span>
+                    </p>
+                  </div>
                 </div>
-                <p className="mt-2 text-sm font-bold text-white">{route.title}</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  {first?.code} → {last?.code} • {route.stationIds.length} stations
-                </p>
+                <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
             );
           })}
         </div>
       </section>
 
-      {/* Search + Add Destination */}
+      {/* Saved Destinations List */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Saved Destinations ({destinations.length})
+          <h2 className="text-sm font-semibold tracking-[-0.01em] text-slate-200">
+            Saved stops ({destinations.length})
           </h2>
-          <button
-            type="button"
-            onClick={onGoToAdd}
-            className="inline-flex items-center gap-1 rounded-xl bg-cyan-500/15 px-3 py-1.5 text-xs font-bold text-cyan-300 transition hover:bg-cyan-500/25 active:scale-95"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add Stop
-          </button>
         </div>
 
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search saved stops (e.g., Thane, Dadar, Andheri)..."
-            className="w-full rounded-2xl border border-slate-800 bg-slate-900/90 py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 outline-none focus:border-cyan-500"
-          />
-        </div>
-
-        {/* Filter Chips */}
+        {/* Clean Filter Pills */}
         <div className="no-scrollbar flex gap-2 overflow-x-auto pb-0.5">
           {(['All', 'Favourites', 'Central', 'Western', 'Harbour'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => setFilter(tab)}
-              className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition ${
+              className={`pressable shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold ${
                 filter === tab
-                  ? 'bg-cyan-500 text-slate-950'
-                  : 'border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
+                  ? 'bg-cyan-400 text-slate-950'
+                  : 'border border-white/[0.08] bg-[#0e1524] text-slate-300 hover:text-white'
               }`}
             >
               {tab}
@@ -220,42 +241,49 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           ))}
         </div>
 
-        {/* Destination List */}
-        <div className="space-y-2.5">
-          {filtered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-6 text-center">
-              <p className="text-sm font-medium text-slate-300">No matching destinations</p>
-              <button
-                type="button"
-                onClick={onGoToAdd}
-                className="mt-3 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950"
-              >
-                + Add Mumbai Station or Pin
-              </button>
-            </div>
-          ) : (
-            filtered.map((dest) => {
+        {filtered.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-white/10 bg-[#0e1524]/60 p-6 text-center">
+            <p className="text-sm font-medium text-slate-300">No saved stops match "{search}"</p>
+            <button
+              type="button"
+              onClick={onGoToAdd}
+              className="pressable mt-3 rounded-xl bg-cyan-400 px-4 py-2 text-xs font-bold text-slate-950"
+            >
+              Search or drop pin
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e1524]">
+            {filtered.map((dest) => {
               const Icon = getCategoryIcon(dest.category);
+              const badge = getLineTag(dest.line);
               const isEditing = editingId === dest.destination_id;
+              const isPreviewed = previewDestinationId === dest.destination_id;
 
               return (
                 <div
                   key={dest.destination_id}
-                  className="rounded-2xl border border-slate-800/90 bg-slate-900/75 p-3.5 transition hover:border-slate-700"
+                  onClick={() => onPreviewDestination(dest)}
+                  className={`cursor-pointer px-4 py-3.5 transition-colors ${
+                    isPreviewed ? 'bg-cyan-400/[0.06]' : 'hover:bg-white/[0.025]'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 flex-1 items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-cyan-400">
-                        <Icon className="h-5 w-5" />
-                      </div>
+                      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-cyan-300">
+                        <Icon className="h-4 w-4" />
+                      </span>
                       <div className="min-w-0 flex-1">
                         {isEditing ? (
-                          <div className="flex items-center gap-2">
+                          <div
+                            className="flex items-center gap-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <input
                               type="text"
                               value={editValue}
                               onChange={(e) => setEditValue(e.target.value)}
-                              className="w-full rounded-lg border border-cyan-500 bg-slate-950 px-2.5 py-1 text-sm text-white outline-none"
+                              className="w-full rounded-lg border border-cyan-400 bg-[#05070b] px-2.5 py-1.5 text-base text-white outline-none sm:text-sm"
                             />
                             <button
                               type="button"
@@ -265,7 +293,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                                 }
                                 setEditingId(null);
                               }}
-                              className="rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950"
+                              className="pressable rounded-lg bg-cyan-400 px-3 py-1.5 text-xs font-bold text-slate-950"
                             >
                               Save
                             </button>
@@ -273,27 +301,32 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         ) : (
                           <>
                             <div className="flex items-center gap-2">
-                              <h3 className="truncate text-sm font-bold text-white">
+                              <h3 className="truncate text-sm font-semibold text-white">
                                 {dest.destination_name}
                               </h3>
+                              <span
+                                className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${badge.cls}`}
+                              >
+                                {badge.code}
+                              </span>
                             </div>
-                            <p className="truncate text-[11px] text-slate-400">
-                              {dest.subtitle || `${dest.line} • ${dest.category}`}
-                            </p>
-                            <p className="font-mono-num mt-1 text-[10px] text-slate-500">
-                              {dest.latitude.toFixed(4)}, {dest.longitude.toFixed(4)}
+                            <p className="mt-0.5 truncate text-xs text-slate-400">
+                              {dest.subtitle || `${dest.line} · ${dest.category}`}
                             </p>
                           </>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    <div
+                      className="flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <button
                         type="button"
                         onClick={() => onToggleFavourite(dest.destination_id)}
-                        aria-label="Toggle favourite"
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800"
+                        aria-label={`Favourite ${dest.destination_name}`}
+                        className="pressable flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/[0.06]"
                       >
                         <Star
                           className={`h-4 w-4 ${
@@ -307,40 +340,43 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           setEditingId(dest.destination_id);
                           setEditValue(dest.destination_name);
                         }}
-                        aria-label="Edit destination"
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+                        aria-label={`Edit ${dest.destination_name}`}
+                        className="pressable flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/[0.06] hover:text-white"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
                       </button>
                       <button
                         type="button"
                         onClick={() => onDeleteDestination(dest.destination_id)}
-                        aria-label="Delete destination"
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-500/15 hover:text-rose-400"
+                        aria-label={`Delete ${dest.destination_name}`}
+                        className="pressable flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-800/70 pt-2.5">
-                    <span className="rounded-md bg-slate-800/90 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-                      {dest.line}
+                  <div
+                    className="mt-2.5 flex items-center justify-between pl-12"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="font-mono-num text-[11px] text-slate-500">
+                      {dest.latitude.toFixed(4)}, {dest.longitude.toFixed(4)}
                     </span>
                     <button
                       type="button"
                       onClick={() => onStartWithDestination(dest)}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-3.5 py-1.5 text-xs font-bold text-slate-950 shadow-md shadow-cyan-500/15 transition active:scale-95"
+                      className="pressable inline-flex items-center gap-1 rounded-xl bg-white/[0.07] px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-400 hover:text-slate-950"
                     >
-                      Set Alert &amp; Go
+                      Set alert
                       <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
               );
-            })
-          )}
-        </div>
+            })}
+          </div>
+        )}
       </section>
     </div>
   );

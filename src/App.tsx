@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Compass, Home, PlusCircle, Settings } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Compass, Home, Navigation, PlusCircle, Radio, Settings, User, WifiOff } from 'lucide-react';
 import { AddDestinationScreen } from './components/AddDestinationScreen';
 import { AlarmOverlay } from './components/AlarmOverlay';
 import { AuthModal } from './components/AuthModal';
 import { HomeScreen } from './components/HomeScreen';
 import { JourneyScreen, StartJourneyConfig } from './components/JourneyScreen';
+import { LiveMap } from './components/LiveMap';
 import { SettingsTelemetryScreen } from './components/SettingsTelemetryScreen';
 import { MUMBAI_PRESET_ROUTES, getStationById } from './data/mumbaiLocal';
 import { alertEngine } from './services/alertEngine';
@@ -45,7 +46,16 @@ export function App() {
   const [telemetryLogs, setTelemetryLogs] = useState<TelemetryLogEntry[]>(() => loadTelemetryLogs());
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
-  // Pre-selected target when user taps a destination or Mumbai Local corridor on Home
+  // Map preview / add pin state
+  const [previewDestination, setPreviewDestination] = useState<Destination | null>(
+    () => loadDestinations()[0] || null
+  );
+  const [pickedCoords, setPickedCoords] = useState<{ lat: number; lng: number }>({
+    lat: 19.0185,
+    lng: 72.8435,
+  });
+
+  // Pre-selected target for Journey tab
   const [selectedDestination, setSelectedDestination] = useState<Destination | null>(null);
   const [selectedPresetRoute, setSelectedPresetRoute] = useState<MumbaiPresetRoute | null>(null);
 
@@ -115,6 +125,7 @@ export function App() {
     const next = [dest, ...destinations];
     setDestinations(next);
     saveDestinations(next);
+    setPreviewDestination(dest);
     void syncRecordToSupabase('destinations', dest as unknown as Record<string, unknown>, user.preferences);
 
     if (startImmediately) {
@@ -142,8 +153,8 @@ export function App() {
       appendLog(
         'alert',
         isFallback
-          ? `🔔 Dead-Reckoning ETA Fallback triggered alarm for ${j.destination_name}!`
-          : `🔔 GPS Proximity threshold (${j.configured_alert_distance} km) reached for ${j.destination_name}!`
+          ? `Dead-Reckoning ETA Fallback triggered alarm for ${j.destination_name}`
+          : `GPS Proximity threshold (${j.configured_alert_distance} km) reached for ${j.destination_name}`
       );
 
       alertEngine.triggerAlarm({
@@ -156,13 +167,99 @@ export function App() {
     [appendLog]
   );
 
-  // Stop any GPS watch cleanly
   const clearGpsWatch = useCallback(() => {
     if (gpsWatchIdRef.current !== null && 'geolocation' in navigator) {
       navigator.geolocation.clearWatch(gpsWatchIdRef.current);
       gpsWatchIdRef.current = null;
     }
   }, []);
+
+  const handleSimulateSignalDrop = useCallback(() => {
+    const j = activeJourneyRef.current;
+    const l = liveStateRef.current;
+    if (!j || !l || l.deadReckoningActive) return;
+
+    const estSec = computeDeadReckoningEtaSec(
+      l.distanceKm,
+      j.configured_alert_distance,
+      l.speedKmh,
+      l.remainingStopsCount,
+      userRef.current.preferences.stopBufferMinutesPerStop
+    );
+
+    setActiveJourney((prev) =>
+      prev ? { ...prev, signal_drops_count: prev.signal_drops_count + 1 } : prev
+    );
+
+    setLiveState((prev) =>
+      prev
+        ? {
+            ...prev,
+            connectionHealth: 'DEAD_RECKONING',
+            deadReckoningActive: true,
+            drSnapshotDistanceKm: prev.distanceKm,
+            drSnapshotSpeedKmh: Math.max(prev.speedKmh, 22),
+            drStopsBufferCount: prev.remainingStopsCount,
+            drRemainingSec: estSec,
+            drTotalEstimatedSec: estSec,
+            recalibrationNotice: null,
+          }
+        : prev
+    );
+
+    appendLog(
+      'signal_lost',
+      `Signal lost at ${l.distanceKm.toFixed(2)} km (${Math.round(
+        Math.max(l.speedKmh, 22)
+      )} km/h + ${l.remainingStopsCount} stops buffer). Fallback timer: ${estSec}s`
+    );
+  }, [appendLog]);
+
+  const handleRestoreSignal = useCallback(() => {
+    const j = activeJourneyRef.current;
+    const l = liveStateRef.current;
+    if (!j || !l || !l.deadReckoningActive) return;
+
+    const recalibratedDist = l.distanceKm;
+    const z = getPollingZoneInfo(recalibratedDist);
+
+    setLiveState((prev) =>
+      prev
+        ? {
+            ...prev,
+            connectionHealth: 'RECALIBRATED',
+            deadReckoningActive: false,
+            drRemainingSec: null,
+            pollingZone: z.zone,
+            pollIntervalSec: z.intervalSec,
+            recalibrationNotice: `Signal Restored — Re-calibrated: ${recalibratedDist.toFixed(
+              2
+            )} km remaining`,
+          }
+        : prev
+    );
+
+    appendLog(
+      'signal_restored',
+      `Signal restored! Auto-recalibrated distance: ${recalibratedDist.toFixed(2)} km`
+    );
+
+    window.setTimeout(() => {
+      setLiveState((prev) =>
+        prev
+          ? { ...prev, connectionHealth: 'ONLINE_GPS', recalibrationNotice: null }
+          : prev
+      );
+    }, 4500);
+
+    if (
+      recalibratedDist <= j.configured_alert_distance &&
+      j.journey_status === 'active' &&
+      Date.now() > snoozeUntilRef.current
+    ) {
+      fireTriggerAlarm('gps_proximity', recalibratedDist);
+    }
+  }, [appendLog, fireTriggerAlarm]);
 
   const handleStartJourney = (config: StartJourneyConfig) => {
     alertEngine.unlockAudio();
@@ -171,7 +268,6 @@ export function App() {
     clearGpsWatch();
     snoozeUntilRef.current = 0;
 
-    // Update destination last_used_at
     setDestinations((prev) => {
       const next = prev.map((d) =>
         d.destination_id === config.destination.destination_id
@@ -182,7 +278,6 @@ export function App() {
       return next;
     });
 
-    // Build simulation waypoints if preset corridor selected
     const preset = MUMBAI_PRESET_ROUTES.find((r) => r.id === config.routeId);
     if (preset) {
       simWaypointsRef.current = preset.stationIds
@@ -255,7 +350,7 @@ export function App() {
       gpsChecksPerformed: 1,
       staticBaselineChecks: 1,
       simProgress: 0,
-      simSpeedMultiplier: 15, // Smooth demo pace so judges see movement fast!
+      simSpeedMultiplier: 15,
       nextStationName: simWaypointsRef.current[1]?.name || config.destination.destination_name,
       remainingStopsCount: config.expectedStops,
     };
@@ -264,7 +359,7 @@ export function App() {
     setLiveState(initialLive);
     appendLog(
       'info',
-      `Journey armed: ${config.startName} → ${config.destination.destination_name} (Alert @ ${config.alertRadiusKm} km)`
+      `Journey armed: ${config.startName} to ${config.destination.destination_name} (Alert @ ${config.alertRadiusKm} km)`
     );
 
     if (config.mode === 'live_gps' && 'geolocation' in navigator) {
@@ -273,7 +368,7 @@ export function App() {
           const curJ = activeJourneyRef.current;
           const curL = liveStateRef.current;
           if (!curJ || !curL || curJ.journey_status !== 'active') return;
-          if (curL.deadReckoningActive) return; // Wait for restore if user manually dropped signal
+          if (curL.deadReckoningActive) return;
 
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
@@ -309,7 +404,6 @@ export function App() {
           }
         },
         () => {
-          // If GPS signal errors during live GPS mode, activate Dead-Reckoning fallback!
           handleSimulateSignalDrop();
         },
         { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
@@ -319,97 +413,6 @@ export function App() {
     setTab('journey');
   };
 
-  // Trigger Signal Lost -> Dead-Reckoning ETA Fallback
-  const handleSimulateSignalDrop = useCallback(() => {
-    const j = activeJourneyRef.current;
-    const l = liveStateRef.current;
-    if (!j || !l || l.deadReckoningActive) return;
-
-    const estSec = computeDeadReckoningEtaSec(
-      l.distanceKm,
-      j.configured_alert_distance,
-      l.speedKmh,
-      l.remainingStopsCount,
-      userRef.current.preferences.stopBufferMinutesPerStop
-    );
-
-    setActiveJourney((prev) =>
-      prev ? { ...prev, signal_drops_count: prev.signal_drops_count + 1 } : prev
-    );
-
-    setLiveState((prev) =>
-      prev
-        ? {
-            ...prev,
-            connectionHealth: 'DEAD_RECKONING',
-            deadReckoningActive: true,
-            drSnapshotDistanceKm: prev.distanceKm,
-            drSnapshotSpeedKmh: Math.max(prev.speedKmh, 22),
-            drStopsBufferCount: prev.remainingStopsCount,
-            drRemainingSec: estSec,
-            drTotalEstimatedSec: estSec,
-            recalibrationNotice: null,
-          }
-        : prev
-    );
-
-    appendLog(
-      'signal_lost',
-      `⚡ Signal lost at ${l.distanceKm.toFixed(2)} km (${Math.round(
-        Math.max(l.speedKmh, 22)
-      )} km/h + ${l.remainingStopsCount} stops buffer). Fallback ETA timer: ${estSec}s`
-    );
-  }, [appendLog]);
-
-  // Restore Signal -> Auto Re-Calibrate with Real/Simulated Position
-  const handleRestoreSignal = useCallback(() => {
-    const j = activeJourneyRef.current;
-    const l = liveStateRef.current;
-    if (!j || !l || !l.deadReckoningActive) return;
-
-    const recalibratedDist = l.distanceKm; // Underlying position continued accurately!
-    const z = getPollingZoneInfo(recalibratedDist);
-
-    setLiveState((prev) =>
-      prev
-        ? {
-            ...prev,
-            connectionHealth: 'RECALIBRATED',
-            deadReckoningActive: false,
-            drRemainingSec: null,
-            pollingZone: z.zone,
-            pollIntervalSec: z.intervalSec,
-            recalibrationNotice: `Signal Restored! Re-calibrated: ${recalibratedDist.toFixed(
-              2
-            )} km remaining`,
-          }
-        : prev
-    );
-
-    appendLog(
-      'signal_restored',
-      `📡 Signal restored! Auto-recalibrated distance: ${recalibratedDist.toFixed(2)} km`
-    );
-
-    // Clear notice badge after 4.5 seconds
-    window.setTimeout(() => {
-      setLiveState((prev) =>
-        prev
-          ? { ...prev, connectionHealth: 'ONLINE_GPS', recalibrationNotice: null }
-          : prev
-      );
-    }, 4500);
-
-    if (
-      recalibratedDist <= j.configured_alert_distance &&
-      j.journey_status === 'active' &&
-      Date.now() > snoozeUntilRef.current
-    ) {
-      fireTriggerAlarm('gps_proximity', recalibratedDist);
-    }
-  }, [appendLog, fireTriggerAlarm]);
-
-  // Auto-react to real device online/offline changes during an active journey
   useEffect(() => {
     const onOffline = () => {
       if (activeJourneyRef.current?.journey_status === 'active') {
@@ -429,14 +432,12 @@ export function App() {
     };
   }, [handleRestoreSignal, handleSimulateSignalDrop]);
 
-  // Main 1-second Simulation & Dead-Reckoning Countdown Loop
   useEffect(() => {
     const timer = window.setInterval(() => {
       const j = activeJourneyRef.current;
       const l = liveStateRef.current;
       if (!j || !l || j.journey_status !== 'active') return;
 
-      // Track baseline static 1s GPS checks vs adaptive checks
       let nextGpsChecks = l.gpsChecksPerformed;
       const nextStaticChecks = l.staticBaselineChecks + 1;
       if (!l.deadReckoningActive && nextStaticChecks % Math.max(1, Math.round(l.pollIntervalSec / 3)) === 0) {
@@ -468,7 +469,6 @@ export function App() {
           appendLog('zone_change', `Adaptive GPS switched to ${zoneInfo.label}`);
         }
 
-        // If Dead-Reckoning is active, count down fallback timer (scaled cleanly with sim speed)
         if (l.deadReckoningActive && l.drRemainingSec !== null) {
           const nextRemaining = Math.max(0, l.drRemainingSec - l.simSpeedMultiplier);
           setLiveState((prev) =>
@@ -518,7 +518,6 @@ export function App() {
           fireTriggerAlarm('gps_proximity', trueDist);
         }
       } else if (l.deadReckoningActive && l.drRemainingSec !== null) {
-        // Live GPS Mode + Dead Reckoning countdown (1s real-time)
         const nextRemaining = Math.max(0, l.drRemainingSec - 1);
         setLiveState((prev) =>
           prev
@@ -538,7 +537,10 @@ export function App() {
     return () => clearInterval(timer);
   }, [appendLog, fireTriggerAlarm]);
 
-  const handleStopAndSaveJourney = (finalStatus: JourneyRecord['journey_status'], alertStatus?: JourneyRecord['alert_status']) => {
+  const handleStopAndSaveJourney = (
+    finalStatus: JourneyRecord['journey_status'],
+    alertStatus?: JourneyRecord['alert_status']
+  ) => {
     alertEngine.stopAlarm();
     void alertEngine.releaseWakeLock();
     clearGpsWatch();
@@ -573,7 +575,7 @@ export function App() {
         completedRecord as unknown as Record<string, unknown>,
         user.preferences
       );
-      appendLog('info', `Journey ended (${finalStatus}) • Battery saved: ${savedPct}%`);
+      appendLog('info', `Journey ended (${finalStatus}) · Battery saved: ${savedPct}%`);
     }
 
     setActiveJourney(null);
@@ -629,7 +631,6 @@ export function App() {
     alertEngine.unlockAudio();
     const dummyDest = destinations[0];
     if (!activeJourney) {
-      // Quick preview alarm on Settings screen
       alertEngine.triggerAlarm({
         destinationName: dummyDest?.destination_name || 'Dadar Station',
         distanceKm: 1.4,
@@ -637,133 +638,303 @@ export function App() {
         prefs: user.preferences,
       });
       window.setTimeout(() => alertEngine.stopAlarm(), 4500);
-      appendLog('alert', 'Ran 4.5s hardware sound + vibration + voice alarm self-test');
+      appendLog('alert', 'Ran 4.5s sound, vibration, and voice alarm self-test');
     } else {
       fireTriggerAlarm('gps_proximity', liveState?.distanceKm || 1.2);
     }
   };
 
+  // Determine Map Props based on current screen & journey state
+  const mapProps = useMemo(() => {
+    if (activeJourney && liveState) {
+      const preset = MUMBAI_PRESET_ROUTES.find((r) => r.id === activeJourney.route_id);
+      const waypoints = preset
+        ? preset.stationIds
+            .map((id) => getStationById(id))
+            .filter((s): s is NonNullable<typeof s> => Boolean(s))
+            .map((s) => ({ name: s.name, lat: s.lat, lng: s.lng }))
+        : [
+            {
+              name: activeJourney.start_location_name,
+              lat: activeJourney.start_lat,
+              lng: activeJourney.start_lng,
+            },
+            {
+              name: activeJourney.destination_name,
+              lat: activeJourney.destination_lat,
+              lng: activeJourney.destination_lng,
+            },
+          ];
+      return {
+        centerLat: liveState.currentLat,
+        centerLng: liveState.currentLng,
+        userLat: liveState.currentLat,
+        userLng: liveState.currentLng,
+        destLat: activeJourney.destination_lat,
+        destLng: activeJourney.destination_lng,
+        destName: activeJourney.destination_name,
+        alertRadiusKm: activeJourney.configured_alert_distance,
+        routeWaypoints: waypoints,
+        showMumbaiNetwork: false,
+        isDeadReckoning: liveState.deadReckoningActive,
+        isAlerting: activeJourney.journey_status === 'alerting',
+        interactivePinMode: false,
+        zoom: 12,
+      };
+    }
+
+    if (tab === 'add') {
+      return {
+        centerLat: pickedCoords.lat,
+        centerLng: pickedCoords.lng,
+        destLat: pickedCoords.lat,
+        destLng: pickedCoords.lng,
+        destName: 'Selected Pin',
+        alertRadiusKm: 1.5,
+        routeWaypoints: [],
+        showMumbaiNetwork: true,
+        isDeadReckoning: false,
+        isAlerting: false,
+        interactivePinMode: true,
+        zoom: 12,
+      };
+    }
+
+    const focusDest = selectedDestination || previewDestination || destinations[0];
+    return {
+      centerLat: focusDest?.latitude ?? 19.085,
+      centerLng: focusDest?.longitude ?? 72.91,
+      destLat: focusDest?.latitude,
+      destLng: focusDest?.longitude,
+      destName: focusDest?.destination_name,
+      alertRadiusKm: user.preferences.defaultAlertRadiusKm,
+      routeWaypoints: [],
+      showMumbaiNetwork: true,
+      isDeadReckoning: false,
+      isAlerting: false,
+      interactivePinMode: false,
+      zoom: 11,
+    };
+  }, [
+    activeJourney,
+    liveState,
+    tab,
+    pickedCoords,
+    selectedDestination,
+    previewDestination,
+    destinations,
+    user.preferences.defaultAlertRadiusKm,
+  ]);
+
+  const navItems = [
+    { id: 'home' as const, label: 'Explore', icon: Home },
+    { id: 'add' as const, label: 'Add Stop', icon: PlusCircle },
+    { id: 'journey' as const, label: activeJourney ? 'Active' : 'Journey', icon: Compass },
+    { id: 'settings' as const, label: 'Telemetry', icon: Settings },
+  ];
+
   return (
-    <div className="min-h-screen bg-[#060911] text-slate-100">
-      {/* Mobile App Shell Container */}
-      <div className="mx-auto min-h-screen w-full max-w-md border-x border-slate-900/80 bg-[#060911] px-4 pt-3 shadow-2xl shadow-black">
-        {tab === 'home' && (
-          <HomeScreen
-            user={user}
-            destinations={destinations}
-            hasActiveJourney={Boolean(activeJourney)}
-            onOpenAuth={() => setAuthModalOpen(true)}
-            onGoToAdd={() => setTab('add')}
-            onStartWithDestination={(dest) => {
-              setSelectedDestination(dest);
-              setSelectedPresetRoute(null);
-              setTab('journey');
-            }}
-            onStartPresetRoute={(route) => {
-              setSelectedPresetRoute(route);
-              setSelectedDestination(null);
-              setTab('journey');
-            }}
-            onResumeJourney={() => setTab('journey')}
-            onToggleFavourite={handleToggleFavourite}
-            onDeleteDestination={handleDeleteDestination}
-            onRenameDestination={handleRenameDestination}
-          />
-        )}
+    <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#05070b] text-slate-100 lg:flex-row">
+      {/* ============================================================
+          PERSISTENT MAP STAGE (Top hero on Mobile, Left Split on Desktop)
+         ============================================================ */}
+      <div className="relative h-[37dvh] w-full shrink-0 lg:h-full lg:flex-1">
+        <LiveMap
+          {...mapProps}
+          savedDestinations={destinations}
+          onMapClick={
+            tab === 'add' ? (lat, lng) => setPickedCoords({ lat, lng }) : undefined
+          }
+          onSelectDestinationPin={(dest) => {
+            setPreviewDestination(dest);
+          }}
+          className="h-full w-full"
+        />
 
-        {tab === 'add' && (
-          <AddDestinationScreen
-            userId={user.user_id}
-            onBack={() => setTab('home')}
-            onSaveDestination={handleSaveNewDestination}
-          />
-        )}
+        {/* Floating Top Brand + Signal Pill + Profile Pill */}
+        <div className="pointer-events-none absolute inset-x-3.5 top-3.5 z-30 flex items-center justify-between gap-2">
+          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-white/10 bg-[#0b101c]/90 py-1.5 pl-2 pr-3.5 shadow-xl backdrop-blur-xl">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-400 text-slate-950">
+              <Navigation className="h-3.5 w-3.5" />
+            </span>
+            <span className="text-sm font-extrabold tracking-tight text-white">WakeMe</span>
+            <span className="h-3.5 w-px bg-white/15" />
+            {liveState?.deadReckoningActive ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-300">
+                <WifiOff className="h-3 w-3" />
+                Fallback
+              </span>
+            ) : activeJourney ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-300">
+                <Radio className="h-3 w-3 animate-pulse" />
+                Armed
+              </span>
+            ) : (
+              <span className="text-xs font-medium text-slate-300">Mumbai Transit</span>
+            )}
+          </div>
 
-        {tab === 'journey' && (
-          <JourneyScreen
-            destinations={destinations}
-            preferences={user.preferences}
-            selectedDestination={selectedDestination}
-            selectedPresetRoute={selectedPresetRoute}
-            activeJourney={activeJourney}
-            liveState={liveState}
-            onStartJourney={handleStartJourney}
-            onPauseResume={() =>
-              setActiveJourney((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      journey_status: prev.journey_status === 'paused' ? 'active' : 'paused',
-                    }
-                  : prev
-              )
-            }
-            onStopJourney={() => handleStopAndSaveJourney('cancelled')}
-            onSimulateSignalDrop={handleSimulateSignalDrop}
-            onRestoreSignal={handleRestoreSignal}
-            onChangeSimSpeed={(mult) =>
-              setLiveState((prev) => (prev ? { ...prev, simSpeedMultiplier: mult } : prev))
-            }
-            onJumpNearAlert={handleJumpNearAlert}
-            onForceTestAlarm={() =>
-              fireTriggerAlarm(
-                liveState?.deadReckoningActive ? 'dead_reckoning_eta' : 'gps_proximity',
-                liveState?.distanceKm ?? 1.2
-              )
-            }
-            onUpdateAlertRadius={(km) =>
-              setActiveJourney((prev) =>
-                prev ? { ...prev, configured_alert_distance: km } : prev
-              )
-            }
-          />
-        )}
+          <button
+            type="button"
+            onClick={() => setAuthModalOpen(true)}
+            className="pressable pointer-events-auto flex items-center gap-2 rounded-full border border-white/10 bg-[#0b101c]/90 px-3 py-1.5 text-xs font-semibold text-slate-200 shadow-xl backdrop-blur-xl hover:border-cyan-400/40"
+          >
+            <User className="h-3.5 w-3.5 text-cyan-300" />
+            <span className="max-w-[96px] truncate">{user.name.split(' ')[0]}</span>
+          </button>
+        </div>
 
-        {tab === 'settings' && (
-          <SettingsTelemetryScreen
-            preferences={user.preferences}
-            journeys={journeys}
-            telemetryLogs={telemetryLogs}
-            onUpdatePreferences={handleUpdatePreferences}
-            onTestFullAlarm={handleTestFullAlarm}
-            onClearLogs={() => {
-              setTelemetryLogs([]);
-              saveTelemetryLogs([]);
-            }}
-          />
+        {/* Desktop Map Bottom Legend (hidden on small screens so bottom sheet overlaps cleanly) */}
+        {!activeJourney && (
+          <div className="pointer-events-none absolute bottom-4 left-4 z-20 hidden items-center gap-2 rounded-full border border-white/10 bg-[#0b101c]/88 px-3.5 py-2 text-xs shadow-xl backdrop-blur-xl lg:inline-flex">
+            <span className="inline-flex items-center gap-1.5 text-slate-300">
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
+              Central
+            </span>
+            <span className="h-3 w-px bg-white/10" />
+            <span className="inline-flex items-center gap-1.5 text-slate-300">
+              <span className="h-2 w-2 rounded-full bg-sky-400" />
+              Western
+            </span>
+            <span className="h-3 w-px bg-white/10" />
+            <span className="inline-flex items-center gap-1.5 text-slate-300">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              Harbour
+            </span>
+          </div>
         )}
       </div>
 
-      {/* Fixed Mobile Bottom Navigation */}
-      <nav className="fixed bottom-0 left-1/2 z-40 w-full max-w-md -translate-x-1/2 border-t border-slate-800/90 bg-[#080d19]/95 px-2 pb-2 pt-1.5 backdrop-blur-lg">
-        <div className="grid grid-cols-4 gap-1">
-          {[
-            { id: 'home' as const, label: 'Home', icon: Home },
-            { id: 'add' as const, label: 'Add Stop', icon: PlusCircle },
-            { id: 'journey' as const, label: activeJourney ? 'Active' : 'Journey', icon: Compass },
-            { id: 'settings' as const, label: 'Telemetry', icon: Settings },
-          ].map((item) => {
-            const Icon = item.icon;
-            const active = tab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setTab(item.id)}
-                className={`relative flex flex-col items-center justify-center gap-0.5 rounded-2xl py-2 transition ${
-                  active ? 'text-cyan-300' : 'text-slate-500 hover:text-slate-300'
-                }`}
-              >
-                {item.id === 'journey' && activeJourney && (
-                  <span className="absolute right-6 top-1.5 h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                )}
-                <Icon className={`h-5 w-5 ${active ? 'stroke-[2.5]' : ''}`} />
-                <span className="text-[10px] font-bold">{item.label}</span>
-              </button>
-            );
-          })}
+      {/* ============================================================
+          COMMUTER CONTROL SHEET (Bottom Sheet on Mobile, Docked Rail on Desktop)
+         ============================================================ */}
+      <aside className="relative z-30 -mt-5 flex min-h-0 flex-1 flex-col rounded-t-[26px] border-t border-white/10 bg-[#080c16]/95 shadow-[0_-14px_40px_rgba(0,0,0,0.65)] backdrop-blur-2xl lg:mt-0 lg:w-[440px] lg:shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:bg-[#080c16] lg:shadow-none xl:w-[468px]">
+        {/* Mobile Grabber Pill */}
+        <div className="flex justify-center pb-1 pt-2.5 lg:hidden">
+          <span className="h-1 w-10 rounded-full bg-white/20" />
         </div>
-      </nav>
+
+        {/* Scrollable Content Region */}
+        <main className="clean-scroll flex-1 overflow-y-auto px-4 pb-6 pt-2 lg:px-6 lg:pt-6">
+          {tab === 'home' && (
+            <HomeScreen
+              destinations={destinations}
+              hasActiveJourney={Boolean(activeJourney)}
+              previewDestinationId={previewDestination?.destination_id}
+              onGoToAdd={() => setTab('add')}
+              onPreviewDestination={(dest) => setPreviewDestination(dest)}
+              onStartWithDestination={(dest) => {
+                setSelectedDestination(dest);
+                setSelectedPresetRoute(null);
+                setPreviewDestination(dest);
+                setTab('journey');
+              }}
+              onStartPresetRoute={(route) => {
+                setSelectedPresetRoute(route);
+                setSelectedDestination(null);
+                setTab('journey');
+              }}
+              onResumeJourney={() => setTab('journey')}
+              onToggleFavourite={handleToggleFavourite}
+              onDeleteDestination={handleDeleteDestination}
+              onRenameDestination={handleRenameDestination}
+            />
+          )}
+
+          {tab === 'add' && (
+            <AddDestinationScreen
+              userId={user.user_id}
+              pickedLat={pickedCoords.lat}
+              pickedLng={pickedCoords.lng}
+              onUpdatePickedCoords={(lat, lng) => setPickedCoords({ lat, lng })}
+              onBack={() => setTab('home')}
+              onSaveDestination={handleSaveNewDestination}
+            />
+          )}
+
+          {tab === 'journey' && (
+            <JourneyScreen
+              destinations={destinations}
+              preferences={user.preferences}
+              selectedDestination={selectedDestination}
+              selectedPresetRoute={selectedPresetRoute}
+              activeJourney={activeJourney}
+              liveState={liveState}
+              onStartJourney={handleStartJourney}
+              onPauseResume={() =>
+                setActiveJourney((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        journey_status: prev.journey_status === 'paused' ? 'active' : 'paused',
+                      }
+                    : prev
+                )
+              }
+              onStopJourney={() => handleStopAndSaveJourney('cancelled')}
+              onSimulateSignalDrop={handleSimulateSignalDrop}
+              onRestoreSignal={handleRestoreSignal}
+              onChangeSimSpeed={(mult) =>
+                setLiveState((prev) => (prev ? { ...prev, simSpeedMultiplier: mult } : prev))
+              }
+              onJumpNearAlert={handleJumpNearAlert}
+              onForceTestAlarm={() =>
+                fireTriggerAlarm(
+                  liveState?.deadReckoningActive ? 'dead_reckoning_eta' : 'gps_proximity',
+                  liveState?.distanceKm ?? 1.2
+                )
+              }
+              onUpdateAlertRadius={(km) =>
+                setActiveJourney((prev) =>
+                  prev ? { ...prev, configured_alert_distance: km } : prev
+                )
+              }
+            />
+          )}
+
+          {tab === 'settings' && (
+            <SettingsTelemetryScreen
+              preferences={user.preferences}
+              journeys={journeys}
+              telemetryLogs={telemetryLogs}
+              onUpdatePreferences={handleUpdatePreferences}
+              onTestFullAlarm={handleTestFullAlarm}
+              onClearLogs={() => {
+                setTelemetryLogs([]);
+                saveTelemetryLogs([]);
+              }}
+            />
+          )}
+        </main>
+
+        {/* Bottom Dock Navigation (Docked cleanly at bottom of sheet/rail) */}
+        <nav className="shrink-0 border-t border-white/[0.08] bg-[#070b14]/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl">
+          <div className="grid grid-cols-4 gap-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const active = tab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`pressable relative flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 py-1.5 ${
+                    active
+                      ? 'bg-cyan-400/12 text-cyan-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {item.id === 'journey' && activeJourney && (
+                    <span className="absolute right-5 top-2 h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  )}
+                  <Icon className={`h-5 w-5 ${active ? 'stroke-[2.3]' : 'stroke-[1.8]'}`} />
+                  <span className="text-[11px] font-semibold">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      </aside>
 
       {/* Account Modal */}
       <AuthModal

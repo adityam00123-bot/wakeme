@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -7,8 +7,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Compass,
-  Gauge,
   Navigation,
   Pause,
   Play,
@@ -29,7 +27,6 @@ import {
   MumbaiPresetRoute,
   UserPreferences,
 } from '../types/wakeme';
-import { LiveMap } from './LiveMap';
 
 export interface StartJourneyConfig {
   mode: 'live_gps' | 'simulator';
@@ -77,7 +74,6 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   onForceTestAlarm,
   onUpdateAlertRadius,
 }) => {
-  // Pre-journey config state
   const [mode, setMode] = useState<'simulator' | 'live_gps'>('simulator');
   const [simSourceType, setSimSourceType] = useState<'preset' | 'custom'>(
     selectedDestination && !selectedPresetRoute ? 'custom' : 'preset'
@@ -98,7 +94,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   const [capturedGps, setCapturedGps] = useState<{ lat: number; lng: number } | null>(null);
   const [showDemoControls, setShowDemoControls] = useState(true);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (selectedPresetRoute) {
       setMode('simulator');
       setSimSourceType('preset');
@@ -190,7 +186,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           destination_id: `route-dest-${endSt.id}`,
           user_id: chosenDest.user_id,
           destination_name: `${endSt.name} (${preset.line})`,
-          subtitle: `${preset.title}`,
+          subtitle: preset.title,
           category: 'Station',
           line: preset.line,
           latitude: endSt.lat,
@@ -224,7 +220,6 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
       return;
     }
 
-    // Live GPS Mode
     const startLat = capturedGps?.lat ?? 19.0185;
     const startLng = capturedGps?.lng ?? 72.8435;
     onStartJourney({
@@ -239,7 +234,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   };
 
   // ==============================================================
-  // ACTIVE JOURNEY LIVE RADAR VIEW
+  // ACTIVE JOURNEY LIVE HUD
   // ==============================================================
   if (activeJourney && liveState) {
     const batterySaved =
@@ -256,147 +251,172 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
 
     const zoneBadgeColor =
       liveState.pollingZone === 'ZONE_3_HIGH'
-        ? 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+        ? 'border-rose-400/40 bg-rose-500/15 text-rose-200'
         : liveState.pollingZone === 'ZONE_2_BALANCED'
-        ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300'
-        : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300';
+        ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200'
+        : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200';
+
+    // Determine visible stepper stops slice
+    const totalStops = activeRouteWaypoints.length;
+    const currentStopIdx =
+      totalStops > 1
+        ? Math.min(totalStops - 1, Math.floor(liveState.simProgress * (totalStops - 1)))
+        : 0;
 
     return (
-      <div className="space-y-3.5 pb-28">
-        {/* Compact Top Header */}
-        <header className="flex items-center justify-between pt-1">
+      <div className="space-y-4">
+        {/* Route Heading & Polling Zone */}
+        <header className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                {activeJourney.mode === 'simulator' ? 'Mumbai Local Sim' : 'Live GPS Tracking'}
-              </span>
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>{activeJourney.mode === 'simulator' ? 'Mumbai Local Sim' : 'Live GPS'}</span>
+              <span>·</span>
+              <span>Alert at {activeJourney.configured_alert_distance.toFixed(1)} km</span>
             </div>
-            <h1 className="truncate text-base font-extrabold text-white">
-              {activeJourney.start_location_name} → {activeJourney.destination_name}
+            <h1 className="mt-1 truncate text-lg font-bold tracking-[-0.02em] text-white">
+              {activeJourney.start_location_name} to {activeJourney.destination_name}
             </h1>
           </div>
 
-          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold ${zoneBadgeColor}`}>
+          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${zoneBadgeColor}`}>
             {liveState.pollingZone === 'ZONE_1_ECO'
-              ? 'ECO • 60s'
+              ? 'Eco 60s'
               : liveState.pollingZone === 'ZONE_2_BALANCED'
-              ? 'BALANCED • 20s'
-              : 'PRECISION • 3s'}
+              ? 'Balanced 20s'
+              : 'Precision 3s'}
           </span>
         </header>
 
-        {/* Connection & Dead-Reckoning Fallback Banner */}
+        {/* Connection Health / Dead-Reckoning Fallback Strip */}
         {liveState.deadReckoningActive ? (
-          <div className="rounded-2xl border border-amber-500/50 bg-amber-500/15 p-3.5 shadow-lg shadow-amber-500/10">
-            <div className="flex items-start justify-between gap-2">
+          <div className="rounded-2xl border border-amber-400/45 bg-amber-500/15 p-3.5">
+            <div className="flex items-center justify-between gap-3">
               <div className="flex items-start gap-2.5">
-                <WifiOff className="mt-0.5 h-5 w-5 shrink-0 animate-pulse text-amber-400" />
+                <WifiOff className="mt-0.5 h-4 w-4 shrink-0 animate-pulse text-amber-300" />
                 <div>
-                  <p className="text-xs font-extrabold uppercase tracking-wide text-amber-300">
-                    Signal / Internet Lost — Dead-Reckoning Active
+                  <p className="text-xs font-bold text-amber-200">
+                    Signal Lost — Dead-Reckoning Active
                   </p>
-                  <p className="mt-0.5 text-[11px] text-amber-100/90">
-                    Locked @ {liveState.drSnapshotDistanceKm?.toFixed(2)} km •{' '}
-                    {Math.round(liveState.drSnapshotSpeedKmh || 0)} km/h •{' '}
+                  <p className="mt-0.5 text-xs text-amber-100/85">
+                    Locked at {liveState.drSnapshotDistanceKm?.toFixed(2)} km ·{' '}
+                    {Math.round(liveState.drSnapshotSpeedKmh || 0)} km/h ·{' '}
                     {liveState.drStopsBufferCount} stops buffer
                   </p>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase text-amber-300">Fallback Alert</p>
-                <p className="font-mono-num text-lg font-extrabold text-white">
+              <div className="shrink-0 text-right">
+                <p className="text-[11px] text-amber-200/80">Est. Alert</p>
+                <p className="font-mono-num text-lg font-bold text-white">
                   {formatDurationCompact(liveState.drRemainingSec)}
                 </p>
               </div>
             </div>
           </div>
         ) : liveState.recalibrationNotice ? (
-          <div className="flex items-center gap-2.5 rounded-2xl border border-emerald-500/50 bg-emerald-500/15 p-3">
-            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
-            <p className="text-xs font-bold text-emerald-200">{liveState.recalibrationNotice}</p>
+          <div className="flex items-center gap-2.5 rounded-2xl border border-emerald-400/45 bg-emerald-500/15 px-3.5 py-3">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-300" />
+            <p className="text-xs font-semibold text-emerald-100">{liveState.recalibrationNotice}</p>
           </div>
         ) : (
-          <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-3.5 py-2.5">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between rounded-2xl border border-white/[0.08] bg-[#0e1524] px-3.5 py-2.5 text-xs">
+            <span className="inline-flex items-center gap-2 font-medium text-slate-200">
               <Satellite className="h-4 w-4 text-emerald-400" />
-              <span className="text-xs font-semibold text-slate-200">
-                Signal Healthy • Accurate GPS Proximity
-              </span>
-            </div>
-            <span className="font-mono-num text-[11px] text-slate-400">
-              ±{Math.round(liveState.accuracyMeters)}m
+              Signal healthy · Live GPS proximity
             </span>
+            <span className="font-mono-num text-slate-400">±{Math.round(liveState.accuracyMeters)}m</span>
           </div>
         )}
 
-        {/* Live Map */}
-        <LiveMap
-          centerLat={liveState.currentLat}
-          centerLng={liveState.currentLng}
-          userLat={liveState.currentLat}
-          userLng={liveState.currentLng}
-          destLat={activeJourney.destination_lat}
-          destLng={activeJourney.destination_lng}
-          destName={activeJourney.destination_name}
-          alertRadiusKm={activeJourney.configured_alert_distance}
-          routeWaypoints={activeRouteWaypoints}
-          isDeadReckoning={liveState.deadReckoningActive}
-          isAlerting={activeJourney.journey_status === 'alerting'}
-          className="h-52 w-full"
-          zoom={12}
-        />
-
-        {/* Telemetry 2x2 Grid */}
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="rounded-2xl border border-slate-800/90 bg-slate-900/80 p-3">
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
-              <span>Distance Left</span>
-              <Compass className="h-3.5 w-3.5 text-cyan-400" />
-            </div>
-            <p className="font-mono-num mt-1 text-2xl font-extrabold text-white">
-              {liveState.distanceKm.toFixed(2)}{' '}
-              <span className="text-xs font-semibold text-slate-400">km</span>
-            </p>
-            <p className="mt-0.5 text-[10px] text-slate-500">
-              Alert @ {activeJourney.configured_alert_distance.toFixed(1)} km radius
+        {/* Unified Telemetry Strip */}
+        <div className="grid grid-cols-3 divide-x divide-white/[0.07] rounded-2xl border border-white/[0.08] bg-[#0e1524]">
+          <div className="p-3.5">
+            <p className="text-[11px] font-medium text-slate-400">Distance</p>
+            <p className="font-mono-num mt-1 text-xl font-bold text-white">
+              {liveState.distanceKm.toFixed(2)}
+              <span className="ml-1 text-xs font-medium text-slate-400">km</span>
             </p>
           </div>
-
-          <div className="rounded-2xl border border-slate-800/90 bg-slate-900/80 p-3">
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
-              <span>Speed &amp; ETA</span>
-              <Gauge className="h-3.5 w-3.5 text-blue-400" />
-            </div>
-            <p className="font-mono-num mt-1 text-2xl font-extrabold text-white">
-              {Math.round(liveState.speedKmh)}{' '}
-              <span className="text-xs font-semibold text-slate-400">km/h</span>
+          <div className="p-3.5">
+            <p className="text-[11px] font-medium text-slate-400">Speed</p>
+            <p className="font-mono-num mt-1 text-xl font-bold text-white">
+              {Math.round(liveState.speedKmh)}
+              <span className="ml-1 text-xs font-medium text-slate-400">km/h</span>
             </p>
-            <p className="mt-0.5 text-[10px] text-cyan-300">
-              {liveState.etaMinutes !== null ? `ETA ~${liveState.etaMinutes} min` : 'Calculating ETA'}
+          </div>
+          <div className="p-3.5">
+            <p className="text-[11px] font-medium text-slate-400">ETA</p>
+            <p className="font-mono-num mt-1 text-xl font-bold text-cyan-300">
+              {liveState.etaMinutes !== null ? `${liveState.etaMinutes}m` : '--'}
             </p>
           </div>
         </div>
 
-        {/* Next Stop + Adaptive Battery Savings Bar */}
-        <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/75 px-3.5 py-2.5 text-xs">
-          <div className="flex items-center gap-2 truncate">
-            <TrainFront className="h-4 w-4 shrink-0 text-cyan-400" />
-            <span className="truncate text-slate-300">
-              Next: <strong className="text-white">{liveState.nextStationName || activeJourney.destination_name}</strong>
-              {liveState.remainingStopsCount > 0 ? ` (${liveState.remainingStopsCount} stops)` : ''}
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300">
-            <BatteryCharging className="h-3.5 w-3.5" />
-            {batterySaved}% saved
-          </div>
-        </div>
+        {/* Mumbai Local Live Route Stepper */}
+        {activeRouteWaypoints.length >= 2 && (
+          <div className="rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
+            <div className="mb-3 flex items-center justify-between text-xs">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-slate-200">
+                <TrainFront className="h-4 w-4 text-cyan-300" />
+                Next: {liveState.nextStationName || activeJourney.destination_name}
+              </span>
+              <span className="inline-flex items-center gap-1 text-emerald-300 font-semibold">
+                <BatteryCharging className="h-3.5 w-3.5" />
+                {batterySaved}% saved
+              </span>
+            </div>
 
-        {/* Live Radius Adjuster */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/75 p-3">
+            <div className="clean-scroll flex items-center gap-1.5 overflow-x-auto pb-1">
+              {activeRouteWaypoints.map((wp, idx) => {
+                const isLast = idx === activeRouteWaypoints.length - 1;
+                const isPassed = idx < currentStopIdx;
+                const isCurrent = idx === currentStopIdx;
+                return (
+                  <React.Fragment key={`${wp.name}-${idx}`}>
+                    <div className="flex shrink-0 flex-col items-center gap-1">
+                      <span
+                        className={`flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 ${
+                          isLast
+                            ? 'border-cyan-300 bg-cyan-400/30'
+                            : isCurrent
+                            ? 'border-emerald-300 bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.6)]'
+                            : isPassed
+                            ? 'border-slate-600 bg-slate-600'
+                            : 'border-slate-500 bg-[#05070b]'
+                        }`}
+                      />
+                      <span
+                        className={`max-w-[74px] truncate text-[10px] font-medium ${
+                          isLast
+                            ? 'font-bold text-cyan-300'
+                            : isCurrent
+                            ? 'font-semibold text-emerald-300'
+                            : isPassed
+                            ? 'text-slate-500'
+                            : 'text-slate-300'
+                        }`}
+                      >
+                        {wp.name.replace(' (Central)', '').replace(' (Western)', '')}
+                      </span>
+                    </div>
+                    {!isLast && (
+                      <div
+                        className={`mb-4 h-0.5 w-6 shrink-0 rounded-full ${
+                          isPassed ? 'bg-emerald-500/60' : 'bg-white/10'
+                        }`}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Alert Radius Adjuster */}
+        <div className="rounded-2xl border border-white/[0.08] bg-[#0e1524] p-3.5">
           <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-300">Alert Radius Threshold</span>
+            <span className="font-medium text-slate-300">Alert radius threshold</span>
             <span className="font-mono-num font-bold text-cyan-300">
               {activeJourney.configured_alert_distance.toFixed(1)} km
             </span>
@@ -412,16 +432,16 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           />
         </div>
 
-        {/* Judge / Field Simulation Controls (Collapsible) */}
-        <div className="rounded-2xl border border-cyan-500/30 bg-slate-900/90 p-3.5">
+        {/* Judge / Field Simulation Controls */}
+        <div className="rounded-2xl border border-cyan-400/25 bg-[#0e1524] p-3.5">
           <button
             type="button"
             onClick={() => setShowDemoControls((v) => !v)}
             className="flex w-full items-center justify-between text-left"
           >
-            <span className="inline-flex items-center gap-2 text-xs font-bold text-cyan-300">
+            <span className="inline-flex items-center gap-2 text-xs font-semibold text-cyan-200">
               <SlidersHorizontal className="h-3.5 w-3.5" />
-              Judge Demo &amp; Fallback Controls
+              Judge demo &amp; signal controls
             </span>
             {showDemoControls ? (
               <ChevronUp className="h-4 w-4 text-slate-400" />
@@ -431,20 +451,20 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </button>
 
           {showDemoControls && (
-            <div className="mt-3 space-y-2.5 border-t border-slate-800 pt-3">
+            <div className="mt-3 space-y-2.5 border-t border-white/[0.07] pt-3">
               {activeJourney.mode === 'simulator' && (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-medium text-slate-400">Sim Speed:</span>
+                  <span className="text-xs text-slate-400">Sim speed</span>
                   <div className="flex gap-1.5">
                     {[1, 5, 15, 30].map((spd) => (
                       <button
                         key={spd}
                         type="button"
                         onClick={() => onChangeSimSpeed(spd)}
-                        className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${
+                        className={`pressable rounded-lg px-2.5 py-1 text-xs font-semibold ${
                           liveState.simSpeedMultiplier === spd
-                            ? 'bg-cyan-500 text-slate-950'
-                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            ? 'bg-cyan-400 text-slate-950'
+                            : 'bg-white/[0.07] text-slate-300 hover:bg-white/10'
                         }`}
                       >
                         {spd}x
@@ -459,7 +479,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                   <button
                     type="button"
                     onClick={onSimulateSignalDrop}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 py-2.5 text-xs font-bold text-amber-300 transition active:scale-95"
+                    className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/15 py-2.5 text-xs font-semibold text-amber-200"
                   >
                     <Zap className="h-3.5 w-3.5" />
                     Drop Signal / Net
@@ -468,7 +488,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                   <button
                     type="button"
                     onClick={onRestoreSignal}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/20 py-2.5 text-xs font-bold text-emerald-300 transition active:scale-95"
+                    className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-400/35 bg-emerald-500/20 py-2.5 text-xs font-semibold text-emerald-200"
                   >
                     <Radio className="h-3.5 w-3.5" />
                     Restore Signal
@@ -478,9 +498,9 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                 <button
                   type="button"
                   onClick={onJumpNearAlert}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 py-2.5 text-xs font-bold text-slate-200 transition active:scale-95"
+                  className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.06] py-2.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
                 >
-                  <Activity className="h-3.5 w-3.5 text-cyan-400" />
+                  <Activity className="h-3.5 w-3.5 text-cyan-300" />
                   Jump Near Stop
                 </button>
               </div>
@@ -488,7 +508,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
               <button
                 type="button"
                 onClick={onForceTestAlarm}
-                className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-rose-500/35 bg-rose-500/15 py-2 text-xs font-bold text-rose-300 transition active:scale-95"
+                className="pressable flex w-full items-center justify-center gap-1.5 rounded-xl border border-rose-400/30 bg-rose-500/15 py-2.5 text-xs font-semibold text-rose-200"
               >
                 <Bell className="h-3.5 w-3.5" />
                 Trigger Approach Alarm Now
@@ -497,12 +517,12 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           )}
         </div>
 
-        {/* Pause / Stop Actions */}
+        {/* Pause / End */}
         <div className="grid grid-cols-2 gap-2.5">
           <button
             type="button"
             onClick={onPauseResume}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-700 bg-slate-900 py-3.5 text-xs font-bold text-white transition active:scale-95"
+            className="pressable inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#0e1524] py-3.5 text-xs font-bold text-white"
           >
             {activeJourney.journey_status === 'paused' ? (
               <>
@@ -519,7 +539,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           <button
             type="button"
             onClick={onStopJourney}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-500/40 bg-rose-500/15 py-3.5 text-xs font-bold text-rose-300 transition active:scale-95"
+            className="pressable inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-400/35 bg-rose-500/15 py-3.5 text-xs font-bold text-rose-200"
           >
             <Square className="h-4 w-4 fill-rose-400" />
             End Journey
@@ -533,23 +553,23 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
   // PRE-JOURNEY CONFIGURATION VIEW
   // ==============================================================
   return (
-    <div className="space-y-4 pb-28">
-      <header className="pt-1">
-        <h1 className="text-lg font-extrabold text-white">Configure Journey (FR-05)</h1>
-        <p className="text-xs text-slate-400">
-          Choose Mumbai Local Simulator for indoor judge demo, or Live Device GPS outdoors.
+    <div className="space-y-5">
+      <header>
+        <h1 className="text-xl font-bold tracking-[-0.025em] text-white">Configure journey</h1>
+        <p className="mt-1 text-xs text-slate-400">
+          Run the Mumbai Local simulator indoors for demos, or arm live phone GPS outdoors.
         </p>
       </header>
 
-      {/* Mode Switcher */}
-      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-800 bg-slate-900 p-1.5">
+      {/* Mode Segmented Control */}
+      <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/[0.08] bg-[#0e1524] p-1.5">
         <button
           type="button"
           onClick={() => setMode('simulator')}
-          className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold transition ${
+          className={`pressable flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold ${
             mode === 'simulator'
-              ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 shadow'
-              : 'text-slate-400 hover:text-white'
+              ? 'bg-cyan-400 text-slate-950'
+              : 'text-slate-300 hover:text-white'
           }`}
         >
           <TrainFront className="h-4 w-4" />
@@ -558,10 +578,10 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
         <button
           type="button"
           onClick={() => setMode('live_gps')}
-          className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold transition ${
+          className={`pressable flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold ${
             mode === 'live_gps'
-              ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 shadow'
-              : 'text-slate-400 hover:text-white'
+              ? 'bg-emerald-400 text-slate-950'
+              : 'text-slate-300 hover:text-white'
           }`}
         >
           <Satellite className="h-4 w-4" />
@@ -569,16 +589,16 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
         </button>
       </div>
 
-      {/* Route / Origin & Destination */}
-      <div className="space-y-3 rounded-2xl border border-slate-800/90 bg-slate-900/75 p-4">
+      {/* Config Panel */}
+      <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
         {mode === 'simulator' ? (
           <>
-            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-950 p-1">
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#05070b] p-1">
               <button
                 type="button"
                 onClick={() => setSimSourceType('preset')}
-                className={`rounded-lg py-1.5 text-[11px] font-bold transition ${
-                  simSourceType === 'preset' ? 'bg-slate-800 text-cyan-300' : 'text-slate-400'
+                className={`pressable rounded-lg py-2 text-xs font-semibold ${
+                  simSourceType === 'preset' ? 'bg-[#141e33] text-cyan-300' : 'text-slate-400'
                 }`}
               >
                 Local Corridor
@@ -586,23 +606,23 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setSimSourceType('custom')}
-                className={`rounded-lg py-1.5 text-[11px] font-bold transition ${
-                  simSourceType === 'custom' ? 'bg-slate-800 text-cyan-300' : 'text-slate-400'
+                className={`pressable rounded-lg py-2 text-xs font-semibold ${
+                  simSourceType === 'custom' ? 'bg-[#141e33] text-cyan-300' : 'text-slate-400'
                 }`}
               >
-                Custom Start → Stop
+                Custom Start to Stop
               </button>
             </div>
 
             {simSourceType === 'preset' ? (
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-300">
-                  Mumbai Local Preset Corridor
+                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                  Mumbai Local corridor
                 </label>
                 <select
                   value={routeId}
                   onChange={(e) => setRouteId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs font-medium text-white outline-none focus:border-cyan-500"
+                  className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3.5 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
                 >
                   {MUMBAI_PRESET_ROUTES.map((r) => (
                     <option key={r.id} value={r.id}>
@@ -612,15 +632,15 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                 </select>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-300">
-                    Starting Station
+                  <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                    Starting station
                   </label>
                   <select
                     value={originStationId}
                     onChange={(e) => setOriginStationId(e.target.value)}
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-white outline-none focus:border-cyan-500"
+                    className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3 py-2.5 text-xs text-white outline-none focus:border-cyan-400/60"
                   >
                     {MUMBAI_STATIONS.filter((s) => s.isMajor).map((s) => (
                       <option key={s.id} value={s.id}>
@@ -630,13 +650,13 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-300">
+                  <label className="mb-1.5 block text-xs font-medium text-slate-300">
                     Destination
                   </label>
                   <select
                     value={destId}
                     onChange={(e) => setDestId(e.target.value)}
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-white outline-none focus:border-cyan-500"
+                    className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3 py-2.5 text-xs text-white outline-none focus:border-cyan-400/60"
                   >
                     {destinations.map((d) => (
                       <option key={d.destination_id} value={d.destination_id}>
@@ -650,38 +670,38 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </>
         ) : (
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950 p-3">
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#05070b] p-3">
               <div>
-                <p className="text-xs font-bold text-white">Starting Point (FR-04)</p>
-                <p className="font-mono-num text-[11px] text-slate-400">
+                <p className="text-xs font-semibold text-white">Starting GPS fix</p>
+                <p className="font-mono-num mt-0.5 text-[11px] text-slate-400">
                   {capturedGps
                     ? `${capturedGps.lat.toFixed(5)}, ${capturedGps.lng.toFixed(5)}`
-                    : 'Not captured yet (will auto-lock on start)'}
+                    : 'Auto-locks when armed'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={handleCaptureGps}
                 disabled={gpsLoading}
-                className="rounded-xl bg-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30"
+                className="pressable rounded-xl bg-emerald-400/20 px-3 py-2 text-xs font-bold text-emerald-300"
               >
-                {gpsLoading ? 'Locking...' : 'Capture GPS'}
+                {gpsLoading ? 'Locking…' : 'Capture GPS'}
               </button>
             </div>
             {gpsError && (
-              <p className="flex items-center gap-1.5 text-[11px] text-amber-300">
+              <p className="flex items-center gap-1.5 text-xs text-amber-300">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                 {gpsError}
               </p>
             )}
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-300">
-                Target Saved Destination
+              <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                Target saved destination
               </label>
               <select
                 value={destId}
                 onChange={(e) => setDestId(e.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-white outline-none focus:border-cyan-500"
+                className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3.5 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
               >
                 {destinations.map((d) => (
                   <option key={d.destination_id} value={d.destination_id}>
@@ -693,11 +713,11 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </div>
         )}
 
-        {/* Alert Distance Radius */}
-        <div className="border-t border-slate-800 pt-3">
+        {/* Alert Threshold */}
+        <div className="border-t border-white/[0.07] pt-3.5">
           <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-300">Alert Distance Threshold</span>
-            <span className="font-mono-num rounded-lg bg-cyan-500/15 px-2 py-0.5 font-bold text-cyan-300">
+            <span className="font-medium text-slate-300">Alert distance threshold</span>
+            <span className="font-mono-num rounded-lg bg-cyan-400/15 px-2 py-0.5 font-bold text-cyan-300">
               {alertRadiusKm.toFixed(1)} km before stop
             </span>
           </div>
@@ -710,19 +730,12 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
             onChange={(e) => setAlertRadiusKm(Number(e.target.value))}
             className="w-full accent-cyan-400"
           />
-          <div className="mt-1 flex justify-between text-[10px] text-slate-500">
-            <span>0.5 km (Tight)</span>
-            <span>2.0 km (Mumbai Local Ideal)</span>
-            <span>10 km (Outstation)</span>
-          </div>
         </div>
 
-        {/* Dead-Reckoning Stops Buffer */}
-        <div className="border-t border-slate-800 pt-3">
+        {/* Dead-Reckoning Buffer */}
+        <div className="border-t border-white/[0.07] pt-3.5">
           <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-300">
-              Expected Stops (Dead-Reckoning Buffer)
-            </span>
+            <span className="font-medium text-slate-300">Expected stops buffer</span>
             <span className="font-mono-num font-bold text-amber-300">
               {expectedStops} stops (+{(expectedStops * preferences.stopBufferMinutesPerStop).toFixed(1)}m)
             </span>
@@ -736,24 +749,24 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
             onChange={(e) => setExpectedStops(Number(e.target.value))}
             className="w-full accent-amber-400"
           />
-          <p className="mt-1 text-[10px] text-slate-400">
-            If internet/GPS drops in a tunnel or low-signal area, WakeMe uses distance + speed + stops to trigger an estimated fallback alert.
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            Used for Dead-Reckoning ETA fallback if internet or GPS drops mid-journey.
           </p>
         </div>
 
         {previewDistKm !== null && (
-          <div className="flex items-center justify-between rounded-xl bg-slate-950 px-3 py-2 text-[11px]">
-            <span className="text-slate-400">Estimated Corridor Distance</span>
+          <div className="flex items-center justify-between rounded-xl bg-[#05070b] px-3.5 py-2.5 text-xs">
+            <span className="text-slate-400">Estimated corridor distance</span>
             <span className="font-mono-num font-bold text-white">{previewDistKm.toFixed(1)} km</span>
           </div>
         )}
       </div>
 
-      {/* Start Button */}
+      {/* Primary CTA */}
       <button
         type="button"
         onClick={handleLaunch}
-        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-400 via-cyan-500 to-blue-600 py-4 text-sm font-extrabold text-slate-950 shadow-xl shadow-cyan-500/25 transition active:scale-[0.98]"
+        className="pressable flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-400 py-4 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 hover:bg-cyan-300"
       >
         <Navigation className="h-4 w-4" />
         Start Journey &amp; Arm WakeMe
