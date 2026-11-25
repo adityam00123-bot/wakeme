@@ -1189,7 +1189,7 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
               Stops on your route ({Math.max(0, previewWaypoints.length - 2)} in between)
             </span>
             <span className="font-mono-num shrink-0 whitespace-nowrap font-semibold text-slate-500 dark:text-slate-400">
-              {previewTotalKm.toFixed(1)} km · ~{formatDurationCompact(estTotalMinutes * 60)}
+              {previewTotalKm.toFixed(1)} km · ~{estTotalMinutes >= 60 ? `${Math.floor(estTotalMinutes / 60)}h ${estTotalMinutes % 60}m` : `${estTotalMinutes}m`}
             </span>
           </div>
 

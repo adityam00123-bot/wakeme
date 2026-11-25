@@ -18,7 +18,9 @@ import { AlarmOverlay } from './components/AlarmOverlay';
 import { AuthModal } from './components/AuthModal';
 import { HomeScreen } from './components/HomeScreen';
 import { JourneyScreen, StartJourneyConfig } from './components/JourneyScreen';
+import { LaunchSplashIntro } from './components/LaunchSplashIntro';
 import { SettingsTelemetryScreen } from './components/SettingsTelemetryScreen';
+import { StartupPermissionsModal } from './components/StartupPermissionsModal';
 import { DEFAULT_DESTINATIONS, MUMBAI_PRESET_ROUTES, getStationById } from './data/mumbaiLocal';
 import { alertEngine } from './services/alertEngine';
 import {
@@ -34,6 +36,11 @@ import {
   isGeoAvailable,
   watchPositionUnified,
 } from './services/nativeGeo';
+import {
+  StartupPermissionReadiness,
+  checkStartupPermissionReadiness,
+  setNativeAlarmScreenMode,
+} from './services/nativePermissions';
 import {
   DEFAULT_PREFERENCES,
   loadDestinations,
@@ -72,12 +79,16 @@ export function App() {
 
   const [activeJourney, setActiveJourney] = useState<JourneyRecord | null>(null);
   const [liveState, setLiveState] = useState<LiveTrackingState | null>(null);
+  const [showLaunchIntro, setShowLaunchIntro] = useState(true);
+  const [startupPermsOpen, setStartupPermsOpen] = useState(false);
+  const [permReadiness, setPermReadiness] = useState<StartupPermissionReadiness | null>(null);
 
   const activeJourneyRef = useRef<JourneyRecord | null>(null);
   const liveStateRef = useRef<LiveTrackingState | null>(null);
   const userRef = useRef<UserProfile>(user);
   const tabRef = useRef<TabKey>(tab);
   const authModalOpenRef = useRef<boolean>(authModalOpen);
+  const startupPermsOpenRef = useRef<boolean>(startupPermsOpen);
   const gpsWatchCleanupRef = useRef<(() => void) | null>(null);
   const gpsSessionTokenRef = useRef(0);
   const simWaypointsRef = useRef<RouteWaypoint[]>([]);
@@ -111,6 +122,23 @@ export function App() {
   userRef.current = user;
   tabRef.current = tab;
   authModalOpenRef.current = authModalOpen;
+  startupPermsOpenRef.current = startupPermsOpen;
+
+  // Silent startup readiness probe during splash intro
+  useEffect(() => {
+    void checkStartupPermissionReadiness().then(setPermReadiness);
+  }, []);
+
+  const handleSplashComplete = useCallback(() => {
+    setShowLaunchIntro(false);
+    if (!Capacitor.isNativePlatform()) return;
+    void checkStartupPermissionReadiness().then((status) => {
+      setPermReadiness(status);
+      if (!status.allCriticalReady) {
+        setStartupPermsOpen(true);
+      }
+    });
+  }, []);
 
   // Handle Android hardware / gesture Back button cleanly in APK
   useEffect(() => {
@@ -118,6 +146,10 @@ export function App() {
     const listenerPromise = CapApp.addListener('backButton', ({ canGoBack }) => {
       if (activeJourneyRef.current?.journey_status === 'alerting') {
         return; // Require alarm snooze/dismiss slide rather than accidental Back exit
+      }
+      if (startupPermsOpenRef.current) {
+        setStartupPermsOpen(false);
+        return;
       }
       if (authModalOpenRef.current) {
         setAuthModalOpen(false);
@@ -242,6 +274,7 @@ export function App() {
           : `GPS Proximity threshold (${j.configured_alert_distance} km) reached for ${j.destination_name}`
       );
 
+      void setNativeAlarmScreenMode(true);
       alertEngine.triggerAlarm({
         destinationName: j.destination_name,
         distanceKm: currentDistKm,
@@ -918,6 +951,7 @@ export function App() {
     alertStatus?: JourneyRecord['alert_status']
   ) => {
     alertEngine.stopAlarm();
+    void setNativeAlarmScreenMode(false);
     void alertEngine.releaseWakeLock();
     clearGpsWatch();
 
@@ -960,6 +994,7 @@ export function App() {
 
   const handleSnoozeAlarm = () => {
     alertEngine.stopAlarm();
+    void setNativeAlarmScreenMode(false);
     snoozeUntilRef.current = Date.now() + 30_000;
     setActiveJourney((prev) =>
       prev ? { ...prev, journey_status: 'active', alert_status: 'snoozed' } : prev
@@ -1070,7 +1105,11 @@ export function App() {
   const isDark = user.preferences.theme === 'dark';
 
   return (
-    <div className="min-h-dvh w-full bg-[#f5f7fa] text-slate-900 transition-colors duration-150 dark:bg-[#0a0d12] dark:text-slate-100">
+    <div
+      className={`min-h-dvh w-full bg-[#f5f7fa] text-slate-900 transition-colors duration-150 dark:bg-[#0a0d12] dark:text-slate-100 ${
+        showLaunchIntro ? 'h-dvh overflow-hidden' : ''
+      }`}
+    >
       <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-[#f5f7fa] md:border-x md:border-slate-200/80 md:shadow-xl dark:bg-[#0a0d12] dark:md:border-white/[0.08]">
         {/* Clean Mobile Header (Brand + Quick Theme Toggle + Profile + Safe Top Bar) */}
         <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200/80 bg-[#f5f7fa]/92 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl dark:border-white/[0.07] dark:bg-[#0a0d12]/92">
@@ -1310,6 +1349,19 @@ export function App() {
           onDismiss={() => handleStopAndSaveJourney('completed', 'dismissed')}
         />
       )}
+
+      {/* Auto-Startup Permissions Sheet (Location, Notifications & Background Battery) */}
+      {permReadiness && (
+        <StartupPermissionsModal
+          isOpen={startupPermsOpen}
+          readiness={permReadiness}
+          onUpdateReadiness={setPermReadiness}
+          onComplete={() => setStartupPermsOpen(false)}
+        />
+      )}
+
+      {/* Rapido / Uber-Inspired Launch Animation */}
+      {showLaunchIntro && <LaunchSplashIntro onComplete={handleSplashComplete} />}
     </div>
   );
 }

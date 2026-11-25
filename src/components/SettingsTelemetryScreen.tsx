@@ -25,6 +25,13 @@ import {
 import { alertEngine } from '../services/alertEngine';
 import { getCurrentPositionUnified } from '../services/nativeGeo';
 import {
+  StartupPermissionReadiness,
+  checkStartupPermissionReadiness,
+  openAndroidAppSettings,
+  requestBatteryOptimizationExemption,
+  requestNativeLocationPermission,
+} from '../services/nativePermissions';
+import {
   AlertLanguage,
   JourneyRecord,
   TelemetryLogEntry,
@@ -117,9 +124,11 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
   const [showSupabase, setShowSupabase] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
+  const [nativeReadiness, setNativeReadiness] = useState<StartupPermissionReadiness | null>(null);
   const testTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    void checkStartupPermissionReadiness().then(setNativeReadiness);
     return () => {
       if (testTimerRef.current !== null) clearTimeout(testTimerRef.current);
     };
@@ -144,9 +153,15 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
 
   const handleRequestPermissions = async () => {
     alertEngine.unlockAudio();
+    const loc = await requestNativeLocationPermission();
     const notif = await alertEngine.requestNotificationPermission();
-    let geoNote = 'GPS Checked';
-    if (diag.geolocationSupported) {
+    if (Capacitor.isNativePlatform()) {
+      await requestBatteryOptimizationExemption();
+    }
+    const updated = await checkStartupPermissionReadiness();
+    setNativeReadiness(updated);
+    let geoNote = loc === 'granted' ? 'GPS Permitted' : 'GPS Permission Denied';
+    if (diag.geolocationSupported && loc === 'granted') {
       try {
         await getCurrentPositionUnified(4000);
         geoNote = 'GPS Locked';
@@ -154,11 +169,19 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
         const code = (err as { code?: number })?.code;
         geoNote = code === 1 ? 'GPS Permission Denied' : 'GPS Standby / Indoors';
       }
-    } else {
+    } else if (!diag.geolocationSupported) {
       geoNote = 'GPS unsupported';
     }
     setDiagVersion((v) => v + 1);
-    setPermMessage(`Audio unlocked · Notifications: ${notif} · ${geoNote}`);
+    setPermMessage(
+      `Audio unlocked · Notifications: ${notif} · ${geoNote}${
+        updated.isNative
+          ? updated.batteryUnrestricted
+            ? ' · Battery Unrestricted'
+            : ' · Battery Optimized'
+          : ''
+      }`
+    );
   };
 
   const handleRunTestAlarm = () => {
@@ -562,42 +585,76 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
         )}
 
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">GPS API</span>
-            <span className={diag.geolocationSupported ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'font-bold text-rose-500'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">GPS API</span>
+            <span className={diag.geolocationSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 font-bold text-rose-500'}>
               {diag.geolocationSupported ? 'Ready' : 'N/A'}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">Web Audio</span>
-            <span className={diag.audioContextSupported ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-amber-500'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">Web Audio</span>
+            <span className={diag.audioContextSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 text-amber-500'}>
               {diag.audioContextState === 'running' ? 'Unlocked' : diag.audioContextSupported ? 'Ready' : 'N/A'}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">Notifications</span>
-            <span className={diag.notificationPermission === 'granted' ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'font-bold text-amber-600 dark:text-amber-400'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">Notifs</span>
+            <span className={diag.notificationPermission === 'granted' ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 font-bold text-amber-600 dark:text-amber-400'}>
               {diag.notificationPermission}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">Vibration</span>
-            <span className={diag.vibrationSupported ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">Vibration</span>
+            <span className={diag.vibrationSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 text-slate-400'}>
               {diag.vibrationSupported ? 'Ready' : 'N/A'}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">Wake Lock</span>
-            <span className={diag.wakeLockSupported ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">Wake Lock</span>
+            <span className={diag.wakeLockSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 text-slate-400'}>
               {diag.wakeLockSupported ? 'Supported' : 'Fallback'}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl bg-[#f5f7fa] px-3 py-2 dark:bg-[#0a0d12]">
-            <span className="text-slate-500 dark:text-slate-400">Speech TTS</span>
-            <span className={diag.speechSynthesisSupported ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}>
+          <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
+            <span className="truncate text-slate-500 dark:text-slate-400">Voice TTS</span>
+            <span className={diag.speechSynthesisSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 text-slate-400'}>
               {diag.speechSynthesisSupported ? `${diag.voicesCount || 'Ready'}` : 'Off'}
             </span>
           </div>
+          {Capacitor.isNativePlatform() && nativeReadiness && (
+            <>
+              <button
+                type="button"
+                onClick={async () => {
+                  await requestBatteryOptimizationExemption();
+                  setNativeReadiness(await checkStartupPermissionReadiness());
+                }}
+                className="pressable flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 text-left dark:bg-[#0a0d12]"
+              >
+                <span className="truncate text-slate-500 dark:text-slate-400">Battery</span>
+                <span
+                  className={
+                    nativeReadiness.batteryUnrestricted
+                      ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400'
+                      : 'shrink-0 font-bold text-amber-600 dark:text-amber-400'
+                  }
+                >
+                  {nativeReadiness.batteryUnrestricted ? 'Unrestricted' : 'Tap Allow'}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setNativeReadiness(await openAndroidAppSettings());
+                  setDiagVersion((v) => v + 1);
+                }}
+                className="pressable flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 text-left dark:bg-[#0a0d12]"
+              >
+                <span className="truncate text-slate-500 dark:text-slate-400">App Info</span>
+                <span className="shrink-0 font-bold text-blue-600 dark:text-blue-400">Settings</span>
+              </button>
+            </>
+          )}
         </div>
 
         <button
