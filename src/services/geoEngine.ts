@@ -250,3 +250,82 @@ export async function searchPlacesHybrid(query: string): Promise<SearchPlaceResu
     return localMatches;
   }
 }
+
+export interface ReverseGeocodeResult {
+  name: string;
+  subtitle: string;
+}
+
+export async function reverseGeocodeHybrid(lat: number, lng: number): Promise<ReverseGeocodeResult> {
+  // Check nearest known transit station within 1.5 km first as fast local anchor
+  let closestStation: { name: string; line: string; distKm: number } | null = null;
+  for (const st of MUMBAI_STATIONS) {
+    const d = haversineDistanceKm(lat, lng, st.lat, st.lng);
+    if (d <= 1.5 && (!closestStation || d < closestStation.distKm)) {
+      closestStation = { name: st.name, line: st.line, distKm: d };
+    }
+  }
+
+  if (!navigator.onLine) {
+    if (closestStation) {
+      return {
+        name: closestStation.name,
+        subtitle: `Near ${closestStation.line} (${closestStation.distKm.toFixed(1)} km)`,
+      };
+    }
+    return {
+      name: 'Pinned Location',
+      subtitle: `${lat.toFixed(4)}°, ${lng.toFixed(4)}° · Offline Pin`,
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(
+      `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = (await res.json()) as {
+        features?: Array<{
+          properties?: {
+            name?: string;
+            street?: string;
+            district?: string;
+            locality?: string;
+            city?: string;
+            state?: string;
+          };
+        }>;
+      };
+      const props = data.features?.[0]?.properties;
+      if (props) {
+        const primary = props.name || props.street || props.locality || props.district || props.city;
+        const secondary = [props.district || props.locality, props.city, props.state]
+          .filter((v, idx, arr) => Boolean(v) && v !== primary && arr.indexOf(v) === idx)
+          .join(', ');
+        if (primary) {
+          return {
+            name: primary,
+            subtitle: secondary || 'Selected map location',
+          };
+        }
+      }
+    }
+  } catch {
+    // Fall back gracefully
+  }
+
+  if (closestStation) {
+    return {
+      name: closestStation.name,
+      subtitle: `Near ${closestStation.line} (${closestStation.distKm.toFixed(1)} km)`,
+    };
+  }
+  return {
+    name: 'Pinned Location',
+    subtitle: `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
+  };
+}

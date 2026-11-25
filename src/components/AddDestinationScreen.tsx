@@ -1,7 +1,27 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Check, Loader2, MapPin, Search, Star, WifiOff } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Briefcase,
+  ChevronRight,
+  Crosshair,
+  GraduationCap,
+  Home,
+  Loader2,
+  Map as MapIcon,
+  MapPin,
+  Navigation,
+  Search,
+  Star,
+  TrainFront,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import { MUMBAI_STATIONS } from '../data/mumbaiLocal';
-import { SearchPlaceResult, searchPlacesHybrid } from '../services/geoEngine';
+import {
+  SearchPlaceResult,
+  reverseGeocodeHybrid,
+  searchPlacesHybrid,
+} from '../services/geoEngine';
 import { Destination, DestinationCategory, MumbaiLine } from '../types/wakeme';
 import { LiveMap } from './LiveMap';
 
@@ -12,40 +32,50 @@ interface AddDestinationScreenProps {
   onSaveDestination: (dest: Destination, startImmediately: boolean) => void;
 }
 
+type SearchFilter = 'All' | 'Express' | 'Bus' | 'Local';
+
 export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   theme,
   userId,
   onBack,
   onSaveDestination,
 }) => {
+  const [step, setStep] = useState<'search' | 'map'>('search');
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<SearchFilter>('All');
   const [results, setResults] = useState<SearchPlaceResult[]>([]);
   const [searching, setSearching] = useState(false);
 
-  const [name, setName] = useState('');
-  const [subtitle, setSubtitle] = useState('');
+  // Selected / Map Confirm state
+  const [name, setName] = useState('Pune Junction');
+  const [subtitle, setSubtitle] = useState('Express (PUNE) · Offline Ready');
   const [category, setCategory] = useState<DestinationCategory>('Station');
   const [line, setLine] = useState<MumbaiLine>('Express');
   const [lat, setLat] = useState(18.5289);
   const [lng, setLng] = useState(73.8744);
   const [favourite, setFavourite] = useState(true);
 
+  // Center-pin drag & reverse-geocode state
+  const [isDraggingMap, setIsDraggingMap] = useState(false);
+  const [resolvingPlace, setResolvingPlace] = useState(false);
+  const [locatingMe, setLocatingMe] = useState(false);
+  const lastAnchoredCoordsRef = useRef<{ lat: number; lng: number }>({ lat: 18.5289, lng: 73.8744 });
+  const reverseTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
-      setResults(
-        MUMBAI_STATIONS.filter((s) => s.isMajor)
-          .slice(0, 8)
-          .map((s) => ({
-            id: s.id,
-            name: s.name,
-            subtitle: `${s.line} (${s.code}) · Offline Ready`,
-            lat: s.lat,
-            lng: s.lng,
-            source: 'Offline Junction DB',
-            line: s.line,
-          }))
-      );
+      const defaults: SearchPlaceResult[] = MUMBAI_STATIONS.filter((s) => s.isMajor).map((s) => ({
+        id: s.id,
+        name: s.name,
+        subtitle: `${s.line} (${s.code}) · Offline Ready`,
+        lat: s.lat,
+        lng: s.lng,
+        source: 'Offline Junction DB',
+        line: s.line,
+      }));
+      setResults(defaults);
+      setSearching(false);
       return;
     }
 
@@ -54,27 +84,82 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
       const found = await searchPlacesHybrid(trimmed);
       setResults(found);
       setSearching(false);
-    }, 320);
+    }, 280);
 
     return () => clearTimeout(timer);
   }, [query]);
 
-  const handleSelectResult = (item: SearchPlaceResult) => {
+  const filteredResults = useMemo(() => {
+    if (filter === 'All') return results;
+    if (filter === 'Express') return results.filter((r) => r.line === 'Express');
+    if (filter === 'Bus') return results.filter((r) => r.line === 'Bus');
+    return results.filter((r) => r.line === 'Central' || r.line === 'Western' || r.line === 'Harbour');
+  }, [results, filter]);
+
+  const handleSelectSearchResult = (item: SearchPlaceResult) => {
+    lastAnchoredCoordsRef.current = { lat: item.lat, lng: item.lng };
     setName(item.name);
     setSubtitle(item.subtitle);
     setLat(item.lat);
     setLng(item.lng);
     if (item.line) setLine(item.line);
     setCategory(item.source === 'Offline Junction DB' ? 'Station' : 'Custom');
+    setStep('map');
   };
 
-  const handleMapTap = (pickedLat: number, pickedLng: number) => {
-    setLat(pickedLat);
-    setLng(pickedLng);
-    if (!name.trim()) {
-      setName('Pinned Stop');
+  const handleOpenMapMode = () => {
+    lastAnchoredCoordsRef.current = { lat, lng };
+    setStep('map');
+  };
+
+  const handleMapMoveStart = () => {
+    setIsDraggingMap(true);
+    if (reverseTimerRef.current !== null) {
+      clearTimeout(reverseTimerRef.current);
+      reverseTimerRef.current = null;
     }
-    setSubtitle(`Custom Pin (${pickedLat.toFixed(4)}, ${pickedLng.toFixed(4)})`);
+  };
+
+  const handleMapMoveEnd = (newLat: number, newLng: number) => {
+    setIsDraggingMap(false);
+    setLat(newLat);
+    setLng(newLng);
+
+    const distMoved =
+      Math.abs(newLat - lastAnchoredCoordsRef.current.lat) +
+      Math.abs(newLng - lastAnchoredCoordsRef.current.lng);
+    if (distMoved < 0.0012) {
+      return;
+    }
+    lastAnchoredCoordsRef.current = { lat: newLat, lng: newLng };
+
+    setResolvingPlace(true);
+    if (reverseTimerRef.current !== null) {
+      clearTimeout(reverseTimerRef.current);
+    }
+    reverseTimerRef.current = window.setTimeout(async () => {
+      const resolved = await reverseGeocodeHybrid(newLat, newLng);
+      setName(resolved.name);
+      setSubtitle(resolved.subtitle);
+      setResolvingPlace(false);
+    }, 260);
+  };
+
+  const handleLocateMe = () => {
+    if (!('geolocation' in navigator)) return;
+    setLocatingMe(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        lastAnchoredCoordsRef.current = { lat: 0, lng: 0 };
+        setLat(pos.coords.latitude);
+        setLng(pos.coords.longitude);
+        setLocatingMe(false);
+      },
+      () => {
+        setLocatingMe(false);
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
   };
 
   const handleSave = (startImmediately: boolean) => {
@@ -95,172 +180,310 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
     onSaveDestination(dest, startImmediately);
   };
 
-  return (
-    <div className="space-y-4">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label="Back to home"
-            className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:text-slate-900 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300 dark:hover:text-white"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div>
-            <h1 className="text-lg font-bold tracking-[-0.02em] text-slate-900 dark:text-white">
-              Search &amp; Add Stop
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Search any city/station or tap the map
-            </p>
-          </div>
-        </div>
-        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300">
-          {!navigator.onLine ? <WifiOff className="h-3 w-3 text-amber-500" /> : null}
-          {navigator.onLine ? 'OSM + Offline' : 'Offline DB'}
-        </span>
-      </header>
-
-      {/* Search Box */}
-      <div className="relative flex items-center">
-        <Search className="pointer-events-none absolute left-4 h-4 w-4 text-slate-400" />
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search Pune, Surat, Goa, Borivali, Dadar…"
-          className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-11 pr-10 text-base text-slate-900 placeholder-slate-400 outline-none focus:border-blue-500 sm:text-sm dark:border-white/10 dark:bg-[#141923] dark:text-white"
-        />
-        {searching && <Loader2 className="absolute right-4 h-4 w-4 animate-spin text-blue-500" />}
-      </div>
-
-      {/* Results List */}
-      {results.length > 0 && (
-        <div className="clean-scroll max-h-40 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:divide-white/[0.06] dark:border-white/[0.08] dark:bg-[#141923]">
-          {results.map((item) => (
+  // ==============================================================
+  // STEP 1: CLEAN AUTOCOMPLETE SEARCH LIST (Uber / Maps Pattern)
+  // ==============================================================
+  if (step === 'search') {
+    return (
+      <div className="space-y-4">
+        <header className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
             <button
-              key={item.id}
               type="button"
-              onClick={() => handleSelectResult(item)}
-              className="pressable flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+              onClick={onBack}
+              aria-label="Back to home"
+              className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:text-slate-900 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300 dark:hover:text-white"
             >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
-                  {item.name}
-                </p>
-                <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                  {item.subtitle}
-                </p>
-              </div>
-              <span className="shrink-0 rounded-md bg-[#edf1f7] px-2 py-0.5 text-[11px] font-semibold text-blue-700 dark:bg-[#1c2331] dark:text-blue-300">
-                {item.source === 'Offline Junction DB' ? 'Station' : 'OSM'}
-              </span>
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <h1 className="text-xl font-bold tracking-[-0.02em] text-slate-900 dark:text-white">
+              Where to?
+            </h1>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300">
+            {!navigator.onLine ? <WifiOff className="h-3 w-3 text-amber-500" /> : null}
+            {navigator.onLine ? 'Online + Offline' : 'Offline Stations'}
+          </span>
+        </header>
+
+        {/* Focused Search Input */}
+        <div className="relative flex items-center">
+          <Search className="pointer-events-none absolute left-4 h-4 w-4 text-blue-600 dark:text-blue-400" />
+          <input
+            type="text"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search station, city, or landmark…"
+            className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-11 pr-10 text-base text-slate-900 placeholder-slate-400 shadow-xs outline-none focus:border-blue-500 sm:text-sm dark:border-white/10 dark:bg-[#141923] dark:text-white dark:shadow-none"
+          />
+          {searching ? (
+            <Loader2 className="absolute right-3.5 h-4 w-4 animate-spin text-blue-500" />
+          ) : query ? (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              aria-label="Clear search"
+              className="pressable absolute right-3 flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-white/10 dark:text-slate-300"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
+
+        {/* Uber-style "Choose on Map" Row */}
+        <button
+          type="button"
+          onClick={handleOpenMapMode}
+          className="pressable flex w-full items-center justify-between rounded-2xl border border-slate-200/80 bg-white px-4 py-3.5 text-left shadow-xs hover:border-blue-400/50 dark:border-white/[0.08] dark:bg-[#141923] dark:shadow-none"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
+              <MapIcon className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                Set location on map
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Pan map to drop a pin anywhere
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-400" />
+        </button>
+
+        {/* Clean Filter Chips */}
+        <div className="no-scrollbar flex gap-2 overflow-x-auto pb-0.5">
+          {(['All', 'Express', 'Bus', 'Local'] as const).map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              onClick={() => setFilter(chip)}
+              className={`pressable shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold ${
+                filter === chip
+                  ? 'bg-blue-600 text-white dark:bg-blue-500'
+                  : 'border border-slate-200 bg-white text-slate-600 dark:border-white/[0.08] dark:bg-[#141923] dark:text-slate-300'
+              }`}
+            >
+              {chip === 'Local' ? 'Mumbai Local' : chip}
             </button>
           ))}
         </div>
-      )}
 
-      {/* Map */}
-      <LiveMap
-        theme={theme}
-        centerLat={lat}
-        centerLng={lng}
-        destLat={lat}
-        destLng={lng}
-        destName={name || 'Selected Pin'}
-        alertRadiusKm={2.0}
-        interactivePinMode
-        onMapClick={handleMapTap}
-        className="h-52 w-full"
-        zoom={11}
-      />
+        {/* Suggestions List */}
+        {filteredResults.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center dark:border-white/10 dark:bg-[#141923]">
+            <p className="text-sm font-semibold text-slate-800 dark:text-white">
+              No exact match for &ldquo;{query}&rdquo;
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Try Pune, Nashik, Surat, Dadar — or pick directly on the map.
+            </p>
+            <button
+              type="button"
+              onClick={handleOpenMapMode}
+              className="pressable mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white dark:bg-blue-500"
+            >
+              <MapPin className="h-3.5 w-3.5" />
+              Set location on map
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm dark:divide-white/[0.06] dark:border-white/[0.08] dark:bg-[#141923] dark:shadow-none">
+            {filteredResults.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleSelectSearchResult(item)}
+                className="pressable flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-slate-50 dark:hover:bg-white/[0.03]"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#edf1f7] text-blue-600 dark:bg-[#1c2331] dark:text-blue-400">
+                    {item.source === 'Offline Junction DB' ? (
+                      <TrainFront className="h-4 w-4" />
+                    ) : (
+                      <MapPin className="h-4 w-4" />
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
+                      {item.name}
+                    </p>
+                    <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                      {item.subtitle}
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
-      {/* Details Form */}
-      <div className="space-y-3.5 rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/[0.08] dark:bg-[#141923]">
-        <div className="flex items-center justify-between">
-          <span className="font-mono-num inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400">
-            <MapPin className="h-3.5 w-3.5" />
-            {lat.toFixed(4)}, {lng.toFixed(4)}
+  // ==============================================================
+  // STEP 2: UBER / GOOGLE MAPS PIN-DROP & CONFIRM SHEET
+  // ==============================================================
+  const categoryOptions: Array<{ id: DestinationCategory; icon: typeof Home }> = [
+    { id: 'Station', icon: TrainFront },
+    { id: 'Home', icon: Home },
+    { id: 'College', icon: GraduationCap },
+    { id: 'Office', icon: Briefcase },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Top Bar: Back to Search + Search Pill + Locate Me */}
+      <header className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setStep('search')}
+          aria-label="Back to search list"
+          className="pressable flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:text-slate-900 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStep('search')}
+          className="pressable flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-left dark:border-white/10 dark:bg-[#141923]"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
+          <span className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">
+            {name || 'Search another stop…'}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleLocateMe}
+          disabled={locatingMe}
+          aria-label="Center map on my GPS location"
+          className="pressable flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-blue-600 dark:border-white/10 dark:bg-[#141923] dark:text-blue-400"
+        >
+          {locatingMe ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Crosshair className="h-4 w-4" />
+          )}
+        </button>
+      </header>
+
+      {/* Spacious Map Canvas with Center Crosshair Pin Overlay */}
+      <div className="relative overflow-hidden rounded-3xl border border-slate-200 shadow-sm dark:border-white/[0.08]">
+        <LiveMap
+          theme={theme}
+          centerLat={lat}
+          centerLng={lng}
+          destLat={lat}
+          destLng={lng}
+          destName={name}
+          alertRadiusKm={2.0}
+          interactivePinMode
+          centerCrosshairMode
+          onMapMoveStart={handleMapMoveStart}
+          onMapMoveEnd={handleMapMoveEnd}
+          className="h-[42dvh] min-h-[260px] w-full rounded-none border-0"
+          zoom={12.5}
+        />
+
+        {/* Uber-style Static Center Pin (Lifts on Drag, Lands on Stop!) */}
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+          <div className="relative flex flex-col items-center">
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-white shadow-xl transition-transform duration-150 dark:bg-blue-500 ${
+                isDraggingMap ? '-translate-y-3 scale-110' : '-translate-y-1.5 scale-100'
+              }`}
+            >
+              <MapPin className="h-5 w-5" />
+            </div>
+            {/* Ground shadow dot */}
+            <span
+              className={`mt-0.5 h-1.5 rounded-full bg-slate-900/50 blur-[1px] transition-all duration-150 dark:bg-black/70 ${
+                isDraggingMap ? 'w-2 opacity-40' : 'w-3.5 opacity-80'
+              }`}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Confirmation Sheet */}
+      <div className="space-y-4 rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-[#141923] dark:shadow-none">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              aria-label="Destination name"
+              className="w-full bg-transparent text-lg font-bold tracking-[-0.02em] text-slate-900 outline-none focus:underline dark:text-white"
+            />
+            <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
+              {isDraggingMap
+                ? 'Release map to drop pin…'
+                : resolvingPlace
+                ? 'Resolving place name…'
+                : subtitle}
+            </p>
+          </div>
+
           <button
             type="button"
             onClick={() => setFavourite((v) => !v)}
-            className={`pressable inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${
+            aria-label="Toggle favourite"
+            className={`pressable flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
               favourite
-                ? 'border-amber-400/50 bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200'
-                : 'border-slate-200 bg-[#edf1f7] text-slate-500 dark:border-white/10 dark:bg-[#1c2331] dark:text-slate-400'
+                ? 'border-amber-300 bg-amber-50 text-amber-500 dark:border-amber-400/40 dark:bg-amber-500/15'
+                : 'border-slate-200 bg-[#f5f7fa] text-slate-400 dark:border-white/10 dark:bg-[#0a0d12]'
             }`}
           >
-            <Star className={`h-3.5 w-3.5 ${favourite ? 'fill-amber-400 text-amber-400' : ''}`} />
-            Favourite
+            <Star className={`h-4 w-4 ${favourite ? 'fill-amber-400' : ''}`} />
           </button>
         </div>
 
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-            Destination name
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g., Pune Junction or Dadar Station"
-            className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-blue-500 sm:text-sm dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
-          />
+        {/* Tactile Label Pills (Replaces clunky dropdowns) */}
+        <div className="flex flex-wrap gap-2">
+          {categoryOptions.map((opt) => {
+            const Icon = opt.icon;
+            const active = category === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setCategory(opt.id)}
+                className={`pressable inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                  active
+                    ? 'border-blue-600 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/15 dark:text-blue-300'
+                    : 'border-slate-200 bg-[#f5f7fa] text-slate-600 dark:border-white/10 dark:bg-[#0a0d12] dark:text-slate-400'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {opt.id}
+              </button>
+            );
+          })}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-              Category
-            </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value as DestinationCategory)}
-              className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
-            >
-              <option value="Station">Station</option>
-              <option value="Home">Home</option>
-              <option value="College">College</option>
-              <option value="Office">Office</option>
-              <option value="Custom">Custom</option>
-            </select>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
-              Corridor
-            </label>
-            <select
-              value={line}
-              onChange={(e) => setLine(e.target.value as MumbaiLine)}
-              className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
-            >
-              <option value="Express">Express Train</option>
-              <option value="Bus">Intercity Bus</option>
-              <option value="Central">Central Local</option>
-              <option value="Western">Western Local</option>
-              <option value="Harbour">Harbour Local</option>
-              <option value="Custom">Custom</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 pt-1">
-          <button
-            type="button"
-            onClick={() => handleSave(false)}
-            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-[#edf1f7] py-3 text-xs font-bold text-slate-800 hover:bg-slate-200 dark:border-white/10 dark:bg-[#1c2331] dark:text-white"
-          >
-            <Check className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            Save Only
-          </button>
+        {/* Actions */}
+        <div className="space-y-2 pt-1">
           <button
             type="button"
             onClick={() => handleSave(true)}
-            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 py-3 text-xs font-bold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"
+            className="pressable flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-3.5 text-sm font-bold text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"
           >
-            Save &amp; Start
+            <Navigation className="h-4 w-4" />
+            Confirm &amp; Start Trip
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSave(false)}
+            className="pressable w-full rounded-xl py-2 text-center text-xs font-semibold text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+          >
+            Save to Places only
           </button>
         </div>
       </div>

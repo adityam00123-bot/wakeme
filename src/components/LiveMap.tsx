@@ -55,7 +55,10 @@ interface LiveMapProps {
   isDeadReckoning?: boolean;
   isAlerting?: boolean;
   interactivePinMode?: boolean;
+  centerCrosshairMode?: boolean;
   onMapClick?: (lat: number, lng: number) => void;
+  onMapMoveStart?: () => void;
+  onMapMoveEnd?: (lat: number, lng: number) => void;
   className?: string;
   zoom?: number;
 }
@@ -92,7 +95,10 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   isDeadReckoning = false,
   isAlerting = false,
   interactivePinMode = false,
+  centerCrosshairMode = false,
   onMapClick,
+  onMapMoveStart,
+  onMapMoveEnd,
   className = 'h-56 w-full',
   zoom = 11,
 }) => {
@@ -102,8 +108,14 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const userMarkerRef = useRef<Marker | null>(null);
   const lastFittedKeyRef = useRef<string>('');
   const appliedThemeRef = useRef<'light' | 'dark'>(theme);
+  const centerCrosshairRef = useRef(centerCrosshairMode);
+  centerCrosshairRef.current = centerCrosshairMode;
   const onClickRef = useRef(onMapClick);
+  const onMoveStartRef = useRef(onMapMoveStart);
+  const onMoveEndRef = useRef(onMapMoveEnd);
   onClickRef.current = onMapClick;
+  onMoveStartRef.current = onMapMoveStart;
+  onMoveEndRef.current = onMapMoveEnd;
 
   const latestPropsRef = useRef({
     theme,
@@ -302,9 +314,21 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     });
 
     map.on('click', (e: MapMouseEvent) => {
+      if (centerCrosshairRef.current) {
+        map.easeTo({ center: [e.lngLat.lng, e.lngLat.lat], duration: 350 });
+      }
       if (onClickRef.current) {
         onClickRef.current(e.lngLat.lat, e.lngLat.lng);
       }
+    });
+
+    map.on('movestart', () => {
+      if (onMoveStartRef.current) onMoveStartRef.current();
+    });
+
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      if (onMoveEndRef.current) onMoveEndRef.current(c.lat, c.lng);
     });
 
     const observer = new ResizeObserver(() => {
@@ -347,7 +371,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       ? '#3b82f6'
       : '#2563eb';
 
-    if (typeof destLat === 'number' && typeof destLng === 'number') {
+    if (!centerCrosshairMode && typeof destLat === 'number' && typeof destLng === 'number') {
       if (!destMarkerRef.current) {
         const el = document.createElement('div');
         el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;">
@@ -405,7 +429,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       }
     } else {
       lastFittedKeyRef.current = '';
-      if (interactivePinMode && typeof destLat === 'number' && typeof destLng === 'number') {
+      if (interactivePinMode && !centerCrosshairMode && typeof destLat === 'number' && typeof destLng === 'number') {
         map.easeTo({ center: [destLng, destLat], duration: 400 });
       }
     }
@@ -421,7 +445,19 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     isDeadReckoning,
     isAlerting,
     interactivePinMode,
+    centerCrosshairMode,
   ]);
+
+  // Recenter smoothly when external centerLat/centerLng changes in centerCrosshairMode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !centerCrosshairMode) return;
+    const current = map.getCenter();
+    const movedFar = Math.abs(current.lat - centerLat) > 0.002 || Math.abs(current.lng - centerLng) > 0.002;
+    if (movedFar) {
+      map.easeTo({ center: [centerLng, centerLat], zoom: Math.max(map.getZoom(), 12.5), duration: 450 });
+    }
+  }, [centerLat, centerLng, centerCrosshairMode]);
 
   const handleFitBounds = () => {
     const map = mapRef.current;
@@ -452,7 +488,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
       {interactivePinMode && (
         <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-slate-200 bg-white/92 px-3 py-1 text-[11px] font-semibold text-slate-800 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#141923]/90 dark:text-slate-100">
-          Tap map to move pin
+          {centerCrosshairMode ? 'Drag map to position pin' : 'Tap map to move pin'}
         </div>
       )}
 
