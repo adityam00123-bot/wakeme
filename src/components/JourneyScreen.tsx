@@ -30,6 +30,7 @@ import {
   formatDurationCompact,
   haversineDistanceKm,
 } from '../services/geoEngine';
+import { getCurrentPositionUnified, isGeoAvailable } from '../services/nativeGeo';
 import {
   Destination,
   JourneyRecord,
@@ -163,27 +164,25 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
 
   // Passive non-blocking GPS lookup when Live GPS mode is selected
   useEffect(() => {
-    if (mode !== 'live_gps' || capturedGps || !('geolocation' in navigator)) return;
+    if (mode !== 'live_gps' || capturedGps || !isGeoAvailable()) return;
     let cancelled = false;
     setGpsLoading(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
+    void getCurrentPositionUnified(6000)
+      .then((pos) => {
         if (cancelled) return;
-        const near = findNearestStation(pos.coords.latitude, pos.coords.longitude, 5.0);
+        const near = findNearestStation(pos.latitude, pos.longitude, 5.0);
         setCapturedGps({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
+          lat: pos.latitude,
+          lng: pos.longitude,
           label: near ? `GPS · Near ${near.station.name}` : 'Live GPS Fix',
         });
         setGpsLoading(false);
         setGpsError(null);
-      },
-      () => {
+      })
+      .catch(() => {
         if (cancelled) return;
         setGpsLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 6000 }
-    );
+      });
     return () => {
       cancelled = true;
     };
@@ -246,28 +245,26 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
       : 48);
 
   const handleCaptureGps = () => {
-    if (!('geolocation' in navigator)) {
-      setGpsError('Geolocation API unavailable on this browser.');
+    if (!isGeoAvailable()) {
+      setGpsError('Geolocation API unavailable on this device.');
       return;
     }
     setGpsLoading(true);
     setGpsError(null);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const near = findNearestStation(pos.coords.latitude, pos.coords.longitude, 5.0);
+    void getCurrentPositionUnified(8000)
+      .then((pos) => {
+        const near = findNearestStation(pos.latitude, pos.longitude, 5.0);
         setCapturedGps({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
+          lat: pos.latitude,
+          lng: pos.longitude,
           label: near ? `GPS · Near ${near.station.name}` : 'Live GPS Fix',
         });
         setGpsLoading(false);
-      },
-      (err) => {
-        setGpsError(err.message || 'GPS unavailable indoors — switch to Simulator for demo.');
+      })
+      .catch((err: { message?: string }) => {
+        setGpsError(err?.message || 'GPS unavailable indoors — switch to Simulator for demo.');
         setGpsLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
+      });
   };
 
   const handleSelectQuickPreset = (preset: MumbaiPresetRoute) => {

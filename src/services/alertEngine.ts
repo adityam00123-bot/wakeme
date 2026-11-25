@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core';
+import { Haptics } from '@capacitor/haptics';
 import { AlertLanguage, UserPreferences } from '../types/wakeme';
 
 function encodeWavDataUrl(samples: Float32Array, sampleRate = 8000): string {
@@ -311,11 +313,16 @@ class WakeMeAlertEngine {
       if (prefs.soundEnabled) {
         this.playDualToneChime(prefs.alarmVolume);
       }
-      if (prefs.vibrationEnabled && 'vibrate' in navigator) {
-        try {
-          navigator.vibrate([800, 200, 800, 200, 1000]);
-        } catch {
-          // Ignore
+      if (prefs.vibrationEnabled) {
+        if (Capacitor.isNativePlatform()) {
+          void Haptics.vibrate({ duration: 900 }).catch(() => {});
+        }
+        if ('vibrate' in navigator) {
+          try {
+            navigator.vibrate([800, 200, 800, 200, 1000]);
+          } catch {
+            // Ignore
+          }
         }
       }
     };
@@ -368,8 +375,10 @@ class WakeMeAlertEngine {
       htmlAudioReady: Boolean(this.alarmAudioEl),
       keepAliveActive: this.keepAliveActive,
       isRinging: this.active,
-      vibrationSupported: typeof navigator !== 'undefined' && 'vibrate' in navigator,
-      geolocationSupported: typeof navigator !== 'undefined' && 'geolocation' in navigator,
+      vibrationSupported:
+        Capacitor.isNativePlatform() || (typeof navigator !== 'undefined' && 'vibrate' in navigator),
+      geolocationSupported:
+        Capacitor.isNativePlatform() || (typeof navigator !== 'undefined' && 'geolocation' in navigator),
       wakeLockSupported: typeof navigator !== 'undefined' && 'wakeLock' in navigator,
       mediaSessionSupported: typeof navigator !== 'undefined' && 'mediaSession' in navigator,
       speechSynthesisSupported: typeof window !== 'undefined' && 'speechSynthesis' in window,

@@ -27,6 +27,7 @@ import {
   haversineDistanceKm,
   interpolateStations,
 } from './services/geoEngine';
+import { isGeoAvailable, watchPositionUnified } from './services/nativeGeo';
 import {
   DEFAULT_PREFERENCES,
   loadDestinations,
@@ -69,7 +70,8 @@ export function App() {
   const activeJourneyRef = useRef<JourneyRecord | null>(null);
   const liveStateRef = useRef<LiveTrackingState | null>(null);
   const userRef = useRef<UserProfile>(user);
-  const gpsWatchIdRef = useRef<number | null>(null);
+  const gpsWatchCleanupRef = useRef<(() => void) | null>(null);
+  const gpsSessionTokenRef = useRef(0);
   const simWaypointsRef = useRef<RouteWaypoint[]>([]);
   const prevGpsFixRef = useRef<{ lat: number; lng: number; timeMs: number } | null>(null);
   const snoozeUntilRef = useRef<number>(0);
@@ -208,9 +210,10 @@ export function App() {
   );
 
   const clearGpsWatch = useCallback(() => {
-    if (gpsWatchIdRef.current !== null && 'geolocation' in navigator) {
-      navigator.geolocation.clearWatch(gpsWatchIdRef.current);
-      gpsWatchIdRef.current = null;
+    gpsSessionTokenRef.current += 1;
+    if (gpsWatchCleanupRef.current) {
+      gpsWatchCleanupRef.current();
+      gpsWatchCleanupRef.current = null;
     }
   }, []);
 
@@ -507,23 +510,24 @@ export function App() {
       } → ${config.destination.destination_name} (${resolvedWaypoints.length} stops, alert @ ${config.alertRadiusKm} km)`
     );
 
-    if (config.mode === 'live_gps' && 'geolocation' in navigator) {
-      gpsWatchIdRef.current = navigator.geolocation.watchPosition(
+    if (config.mode === 'live_gps' && isGeoAvailable()) {
+      const token = gpsSessionTokenRef.current;
+      void watchPositionUnified(
         (pos) => {
           const curJ = activeJourneyRef.current;
           const curL = liveStateRef.current;
           if (!curJ || !curL || curJ.journey_status !== 'active') return;
 
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
+          const lat = pos.latitude;
+          const lng = pos.longitude;
           const nowMs = Date.now();
-          const accuracy = pos.coords.accuracy || 15;
+          const accuracy = pos.accuracy || 15;
 
           // Compute speed from hardware sensor OR haversine displacement delta
           let measuredSpeedKmh = curL.speedKmh;
           let spdSrc: LiveTrackingState['speedSource'] = curL.speedSource;
-          if (typeof pos.coords.speed === 'number' && pos.coords.speed >= 0.4) {
-            measuredSpeedKmh = pos.coords.speed * 3.6;
+          if (typeof pos.speed === 'number' && pos.speed >= 0.4) {
+            measuredSpeedKmh = pos.speed * 3.6;
             spdSrc = 'gps_sensor';
           } else if (prevGpsFixRef.current) {
             const dtHours = (nowMs - prevGpsFixRef.current.timeMs) / 3_600_000;
@@ -554,7 +558,7 @@ export function App() {
               speedKmh: measuredSpeedKmh,
               speedSource: spdSrc,
               accuracyMeters: accuracy,
-              headingDeg: pos.coords.heading ?? null,
+              headingDeg: pos.heading ?? null,
             });
             return;
           }
@@ -595,7 +599,7 @@ export function App() {
                   speedKmh: measuredSpeedKmh,
                   speedSource: spdSrc,
                   accuracyMeters: accuracy,
-                  headingDeg: pos.coords.heading ?? prev.headingDeg,
+                  headingDeg: pos.heading ?? prev.headingDeg,
                   etaMinutes:
                     measuredSpeedKmh > 3
                       ? Math.max(1, Math.round((dist / measuredSpeedKmh) * 60))
@@ -624,7 +628,7 @@ export function App() {
                 ? {
                     ...prev,
                     gpsStatusNote:
-                      'Location permission denied — allow location in browser or switch to Simulator.',
+                      'Location permission denied — allow location in settings or use Simulator.',
                   }
                 : prev
             );
@@ -632,9 +636,14 @@ export function App() {
           } else {
             handleSimulateSignalDrop('gps_timeout');
           }
-        },
-        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
-      );
+        }
+      ).then((cleanup) => {
+        if (gpsSessionTokenRef.current !== token) {
+          cleanup();
+        } else {
+          gpsWatchCleanupRef.current = cleanup;
+        }
+      });
     }
 
     setTab('journey');

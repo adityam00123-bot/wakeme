@@ -22,6 +22,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { alertEngine } from '../services/alertEngine';
+import { getCurrentPositionUnified } from '../services/nativeGeo';
 import {
   AlertLanguage,
   JourneyRecord,
@@ -137,15 +138,13 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
     const notif = await alertEngine.requestNotificationPermission();
     let geoNote = 'GPS Checked';
     if (diag.geolocationSupported) {
-      navigator.geolocation.getCurrentPosition(
-        () => {
+      void getCurrentPositionUnified(3500)
+        .then(() => {
           setDiagVersion((v) => v + 1);
-        },
-        () => {
+        })
+        .catch(() => {
           setDiagVersion((v) => v + 1);
-        },
-        { timeout: 3500 }
-      );
+        });
     } else {
       geoNote = 'GPS unsupported';
     }

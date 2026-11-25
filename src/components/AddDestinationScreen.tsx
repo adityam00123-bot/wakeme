@@ -22,6 +22,7 @@ import {
   reverseGeocodeHybrid,
   searchPlacesHybrid,
 } from '../services/geoEngine';
+import { getCurrentPositionUnified, isGeoAvailable } from '../services/nativeGeo';
 import { Destination, DestinationCategory, MumbaiLine } from '../types/wakeme';
 import { LiveMap } from './LiveMap';
 
@@ -146,20 +147,18 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   };
 
   const handleLocateMe = () => {
-    if (!('geolocation' in navigator)) return;
+    if (!isGeoAvailable()) return;
     setLocatingMe(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
+    void getCurrentPositionUnified(6000)
+      .then((pos) => {
         lastAnchoredCoordsRef.current = { lat: 0, lng: 0 };
-        setLat(pos.coords.latitude);
-        setLng(pos.coords.longitude);
+        setLat(pos.latitude);
+        setLng(pos.longitude);
         setLocatingMe(false);
-      },
-      () => {
+      })
+      .catch(() => {
         setLocatingMe(false);
-      },
-      { enableHighAccuracy: true, timeout: 6000 }
-    );
+      });
   };
 
   const handleSave = (startImmediately: boolean) => {

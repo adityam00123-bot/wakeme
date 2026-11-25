@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:apk": "npm run android:sync && cmd /c \"cd android && gradlew.bat assembleDebug --no-daemon\""
   },
   "keywords": [
     "wakeme",
@@ -20,12 +22,18 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/cli": "^8.6.3",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/geolocation": "^8.2.5",
+    "@capacitor/haptics": "^8.0.2",
     "lucide-react": "^1.80.0",
     "maplibre-gl": "^6.19.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
     "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.3.2",
     "@types/react-dom": "^19.3.0",
