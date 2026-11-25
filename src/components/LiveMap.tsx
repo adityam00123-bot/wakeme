@@ -50,6 +50,8 @@ interface LiveMapProps {
   destName?: string;
   userLat?: number;
   userLng?: number;
+  estimatedLat?: number | null;
+  estimatedLng?: number | null;
   alertRadiusKm?: number;
   routeWaypoints?: StationPin[];
   isDeadReckoning?: boolean;
@@ -90,6 +92,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   destName,
   userLat,
   userLng,
+  estimatedLat = null,
+  estimatedLng = null,
   alertRadiusKm = 2.0,
   routeWaypoints = [],
   isDeadReckoning = false,
@@ -106,6 +110,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const mapRef = useRef<MapLibreMap | null>(null);
   const destMarkerRef = useRef<Marker | null>(null);
   const userMarkerRef = useRef<Marker | null>(null);
+  const estMarkerRef = useRef<Marker | null>(null);
   const lastFittedKeyRef = useRef<string>('');
   const appliedThemeRef = useRef<'light' | 'dark'>(theme);
   const centerCrosshairRef = useRef(centerCrosshairMode);
@@ -342,6 +347,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       observer.disconnect();
       destMarkerRef.current?.remove();
       userMarkerRef.current?.remove();
+      estMarkerRef.current?.remove();
       map.remove();
       mapRef.current = null;
     };
@@ -392,7 +398,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       destMarkerRef.current = null;
     }
 
-    const userColor = isDeadReckoning ? '#d97706' : '#059669';
+    const userColor = isDeadReckoning ? '#64748b' : '#059669';
     if (typeof userLat === 'number' && typeof userLng === 'number') {
       if (!userMarkerRef.current) {
         const el = document.createElement('div');
@@ -415,17 +421,41 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     }
 
     if (
+      isDeadReckoning &&
+      typeof estimatedLat === 'number' &&
+      typeof estimatedLng === 'number'
+    ) {
+      if (!estMarkerRef.current) {
+        const el = document.createElement('div');
+        el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;">
+          <span style="position:absolute;inset:0;border-radius:9999px;background:#f59e0b;opacity:0.30;border:2px dashed #f59e0b;"></span>
+          <span style="width:14px;height:14px;border-radius:9999px;background:#d97706;border:2.5px solid #ffffff;box-shadow:0 2px 10px rgba(217,119,6,0.5);"></span>
+        </div>`;
+        estMarkerRef.current = new Marker({ element: el })
+          .setLngLat([estimatedLng, estimatedLat])
+          .addTo(map);
+      } else {
+        estMarkerRef.current.setLngLat([estimatedLng, estimatedLat]);
+      }
+    } else {
+      estMarkerRef.current?.remove();
+      estMarkerRef.current = null;
+    }
+
+    if (
       typeof userLat === 'number' &&
       typeof userLng === 'number' &&
       typeof destLat === 'number' &&
       typeof destLng === 'number'
     ) {
-      const key = `${destLat.toFixed(4)},${destLng.toFixed(4)}:${routeWaypoints.length}`;
+      const wpFirst = routeWaypoints[0];
+      const wpLast = routeWaypoints[routeWaypoints.length - 1];
+      const key = `${destLat.toFixed(4)},${destLng.toFixed(4)}:${routeWaypoints.length}:${wpFirst?.name || ''}:${wpLast?.name || ''}:${wpFirst?.lat.toFixed(3) || ''}`;
       if (lastFittedKeyRef.current !== key) {
         lastFittedKeyRef.current = key;
         const bounds = new LngLatBounds([userLng, userLat], [destLng, destLat]);
         routeWaypoints.forEach((w) => bounds.extend([w.lng, w.lat]));
-        map.fitBounds(bounds, { padding: 42, maxZoom: 12, duration: 700 });
+        map.fitBounds(bounds, { padding: 42, maxZoom: 12.5, duration: 600 });
       }
     } else {
       lastFittedKeyRef.current = '';
@@ -440,6 +470,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     destName,
     userLat,
     userLng,
+    estimatedLat,
+    estimatedLng,
     alertRadiusKm,
     routeWaypoints,
     isDeadReckoning,

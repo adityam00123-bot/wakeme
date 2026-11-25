@@ -114,23 +114,44 @@ export interface MumbaiPresetRoute {
   highlightNote?: string;
 }
 
+export interface RouteWaypoint {
+  id?: string;
+  name: string;
+  code?: string;
+  line?: MumbaiLine | string;
+  lat: number;
+  lng: number;
+  cumDistKm?: number;
+}
+
 export interface LiveTrackingState {
   currentLat: number;
   currentLng: number;
   distanceKm: number;
   speedKmh: number;
+  speedSource: 'gps_sensor' | 'haversine_delta' | 'simulator' | 'estimated';
   accuracyMeters: number;
+  headingDeg: number | null;
   etaMinutes: number | null;
   pollingZone: PollingZone;
   pollIntervalSec: number;
   connectionHealth: ConnectionHealth;
   deadReckoningActive: boolean;
+  drReason: 'signal_lost' | 'gps_timeout' | 'manual_demo' | null;
   drSnapshotDistanceKm: number | null;
   drSnapshotSpeedKmh: number | null;
+  drSpeedIsBaseline: boolean;
   drStopsBufferCount: number;
   drRemainingSec: number | null;
   drTotalEstimatedSec: number | null;
+  drEstimatedLat: number | null;
+  drEstimatedLng: number | null;
+  drEstimatedDistanceKm: number | null;
+  drProgress0to1: number | null;
+  drDriftDeltaKm: number | null;
   recalibrationNotice: string | null;
+  gpsStatusNote: string | null;
+  lastGpsFixAt: number | null;
   consecutiveHitsInRadius: number;
   gpsChecksPerformed: number;
   staticBaselineChecks: number;
@@ -138,4 +159,6 @@ export interface LiveTrackingState {
   simSpeedMultiplier: number;
   nextStationName: string | null;
   remainingStopsCount: number;
+  totalRouteKm: number;
+  routeWaypoints: RouteWaypoint[];
 }

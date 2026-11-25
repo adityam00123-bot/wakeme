@@ -50,7 +50,7 @@ export const AlarmOverlay: React.FC<AlarmOverlayProps> = ({
           </div>
         </div>
 
-        <p className="text-sm font-semibold text-white/85">Wake up — Approaching stop</p>
+        <p className="text-sm font-semibold text-white/90">Wake up — Sound &amp; vibration active</p>
         <h1 className="mt-2 max-w-sm text-3xl font-extrabold leading-tight tracking-[-0.03em] text-white">
           {destinationName}
         </h1>

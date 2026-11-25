@@ -1,29 +1,170 @@
 import { AlertLanguage, UserPreferences } from '../types/wakeme';
 
+function encodeWavDataUrl(samples: Float32Array, sampleRate = 8000): string {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+function buildSilentKeepAliveWav(): string {
+  const sampleRate = 8000;
+  const samples = new Float32Array(sampleRate);
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] = Math.sin((2 * Math.PI * 40 * i) / sampleRate) * 0.00025;
+  }
+  return encodeWavDataUrl(samples, sampleRate);
+}
+
+function buildAlarmRingWav(): string {
+  const sampleRate = 12000;
+  const durationSec = 1.6;
+  const total = Math.floor(sampleRate * durationSec);
+  const samples = new Float32Array(total);
+  for (let i = 0; i < total; i++) {
+    const t = i / sampleRate;
+    const cycle = t % 0.8;
+    const isBeep1 = cycle >= 0.02 && cycle < 0.24;
+    const isBeep2 = cycle >= 0.28 && cycle < 0.56;
+    if (isBeep1 || isBeep2) {
+      const f1 = isBeep1 ? 960 : 1240;
+      const f2 = isBeep1 ? 1440 : 1860;
+      const raw = Math.sin(2 * Math.PI * f1 * t) * 0.65 + Math.sin(2 * Math.PI * f2 * t) * 0.35;
+      samples[i] = raw * 0.88;
+    } else {
+      samples[i] = 0;
+    }
+  }
+  return encodeWavDataUrl(samples, sampleRate);
+}
+
 class WakeMeAlertEngine {
   private audioCtx: AudioContext | null = null;
+  private keepAliveEl: HTMLAudioElement | null = null;
+  private alarmAudioEl: HTMLAudioElement | null = null;
   private pulseTimer: number | null = null;
   private repeatTimer: number | null = null;
   private wakeLockSentinel: WakeLockSentinel | null = null;
+  private keepAliveActive = false;
   private active = false;
+  private silentWavUrl: string | null = null;
+  private alarmWavUrl: string | null = null;
+
+  constructor() {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.keepAliveActive) {
+          void this.acquireWakeLock();
+        }
+      });
+    }
+  }
+
+  private ensureAudioElements(): void {
+    if (typeof Audio === 'undefined') return;
+    if (!this.silentWavUrl) this.silentWavUrl = buildSilentKeepAliveWav();
+    if (!this.alarmWavUrl) this.alarmWavUrl = buildAlarmRingWav();
+
+    if (!this.keepAliveEl) {
+      const el = new Audio(this.silentWavUrl);
+      el.loop = true;
+      el.volume = 0.01;
+      el.setAttribute('playsinline', 'true');
+      this.keepAliveEl = el;
+    }
+    if (!this.alarmAudioEl) {
+      const el = new Audio(this.alarmWavUrl);
+      el.loop = true;
+      el.volume = 1.0;
+      el.setAttribute('playsinline', 'true');
+      this.alarmAudioEl = el;
+    }
+  }
 
   /**
-   * Call during a user tap ("Start Journey" / "Test Alarm") so browsers unlock Web Audio.
+   * Call during a user tap ("Start Trip" / "Test Alarm") so mobile browsers unlock Web Audio & HTML5 Audio.
    */
   public unlockAudio(): void {
     try {
       const AudioContextCtor =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextCtor) return;
-      if (!this.audioCtx) {
-        this.audioCtx = new AudioContextCtor();
+      if (AudioContextCtor) {
+        if (!this.audioCtx) {
+          this.audioCtx = new AudioContextCtor();
+        }
+        if (this.audioCtx.state === 'suspended') {
+          void this.audioCtx.resume();
+        }
       }
-      if (this.audioCtx.state === 'suspended') {
-        void this.audioCtx.resume();
-      }
+      this.ensureAudioElements();
     } catch {
       // AudioContext unavailable
+    }
+  }
+
+  /**
+   * Keeps PWA timers & GPS alive on mobile screens via an inaudible looping MediaSession track.
+   */
+  public startKeepAlive(destinationName: string): void {
+    this.keepAliveActive = true;
+    this.unlockAudio();
+    try {
+      if (this.keepAliveEl && this.keepAliveEl.paused) {
+        void this.keepAliveEl.play().catch(() => {});
+      }
+      if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: `WakeMe Armed · ${destinationName}`,
+          artist: 'Live GPS & Dead-Reckoning Guard',
+          album: 'WakeMe Transit',
+        });
+      }
+    } catch {
+      // Ignore background media restriction
+    }
+  }
+
+  public stopKeepAlive(): void {
+    this.keepAliveActive = false;
+    try {
+      if (this.keepAliveEl) {
+        this.keepAliveEl.pause();
+        this.keepAliveEl.currentTime = 0;
+      }
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null;
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -40,6 +181,7 @@ class WakeMeAlertEngine {
   }
 
   public async releaseWakeLock(): Promise<void> {
+    this.stopKeepAlive();
     try {
       if (this.wakeLockSentinel) {
         await this.wakeLockSentinel.release();
@@ -66,23 +208,24 @@ class WakeMeAlertEngine {
 
     const ctx = this.audioCtx;
     const now = ctx.currentTime;
-    const freqs = [880, 1174.66, 987.77, 1318.51];
+    const freqs = [960, 1318.51, 987.77, 1567.98];
+    const clampedVol = Math.min(1, Math.max(0.2, volume));
 
     freqs.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = idx % 2 === 0 ? 'triangle' : 'sine';
-      osc.frequency.setValueAtTime(freq, now + idx * 0.16);
+      osc.type = idx % 2 === 0 ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
 
-      const start = now + idx * 0.16;
+      const start = now + idx * 0.14;
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(Math.min(1, Math.max(0.1, volume)) * 0.5, start + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.15);
+      gain.gain.exponentialRampToValueAtTime(clampedVol * 0.72, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.13);
 
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(start);
-      osc.stop(start + 0.16);
+      osc.stop(start + 0.14);
     });
   }
 
@@ -95,7 +238,7 @@ class WakeMeAlertEngine {
 
       if (lang === 'hi') {
         text = isFallback
-          ? `WakeMe Alert! Network band hai, par estimated time ke hisaab se aap ${destinationName} ke paas pahunch gaye hain. Kripya uthiye!`
+          ? `WakeMe Alert! Signal band hai, par estimated time ke hisaab se aap ${destinationName} ke paas pahunch gaye hain. Kripya uthiye!`
           : `WakeMe Alert! Aap ${destinationName} se sirf ${distText} kilometer door hain. Kripya uthiye!`;
       } else if (lang === 'mr') {
         text = isFallback
@@ -121,6 +264,7 @@ class WakeMeAlertEngine {
   public sendSystemNotification(title: string, body: string): void {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     try {
+      const vibrate = [700, 180, 700, 180, 900];
       if (navigator.serviceWorker?.controller) {
         void navigator.serviceWorker.ready.then((reg) =>
           reg.showNotification(title, {
@@ -129,7 +273,8 @@ class WakeMeAlertEngine {
             badge: '/icon-192.png',
             tag: 'wakeme-destination-alert',
             requireInteraction: true,
-          })
+            vibrate,
+          } as NotificationOptions)
         );
       } else {
         new Notification(title, {
@@ -153,6 +298,13 @@ class WakeMeAlertEngine {
     this.stopAlarm();
     this.active = true;
     const { destinationName, distanceKm, isFallback, prefs } = params;
+    this.ensureAudioElements();
+
+    if (prefs.soundEnabled && this.alarmAudioEl) {
+      this.alarmAudioEl.volume = Math.min(1, Math.max(0.25, prefs.alarmVolume));
+      this.alarmAudioEl.currentTime = 0;
+      void this.alarmAudioEl.play().catch(() => {});
+    }
 
     const fireOnce = () => {
       if (!this.active) return;
@@ -161,7 +313,7 @@ class WakeMeAlertEngine {
       }
       if (prefs.vibrationEnabled && 'vibrate' in navigator) {
         try {
-          navigator.vibrate([500, 150, 500, 150, 750]);
+          navigator.vibrate([800, 200, 800, 200, 1000]);
         } catch {
           // Ignore
         }
@@ -171,20 +323,24 @@ class WakeMeAlertEngine {
     fireOnce();
 
     if (prefs.voiceAlertEnabled) {
-      this.speakAlert(destinationName, distanceKm, prefs.voiceLanguage, isFallback);
+      window.setTimeout(() => {
+        if (this.active) {
+          this.speakAlert(destinationName, distanceKm, prefs.voiceLanguage, isFallback);
+        }
+      }, 450);
     }
 
     this.sendSystemNotification(
-      isFallback ? `⚠️ WakeMe Fallback Alert: ${destinationName}` : `🔔 WakeMe: Approaching ${destinationName}`,
+      isFallback ? `WakeMe Fallback Alert: ${destinationName}` : `WakeMe: Approaching ${destinationName}`,
       isFallback
         ? 'Estimated arrival reached during signal drop. Check your stop!'
         : `Only ${distanceKm.toFixed(2)} km remaining to ${destinationName}.`
     );
 
-    // Rapid chime + vibration loop every 2.4s while alarm overlay is active
+    // Continuous chime + vibration loop every 2.2s while alarm overlay is active
     this.pulseTimer = window.setInterval(() => {
       fireOnce();
-    }, 2400);
+    }, 2200);
 
     // Repeat voice announcement at user-configured interval if enabled
     if (prefs.repeatAlertEnabled && prefs.voiceAlertEnabled) {
@@ -198,6 +354,14 @@ class WakeMeAlertEngine {
 
   public stopAlarm(): void {
     this.active = false;
+    if (this.alarmAudioEl) {
+      try {
+        this.alarmAudioEl.pause();
+        this.alarmAudioEl.currentTime = 0;
+      } catch {
+        // Ignore
+      }
+    }
     if (this.pulseTimer !== null) {
       clearInterval(this.pulseTimer);
       this.pulseTimer = null;
