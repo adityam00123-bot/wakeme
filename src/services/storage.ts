@@ -15,6 +15,7 @@ const KEYS = {
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
+  theme: 'light',
   defaultAlertRadiusKm: 5.0,
   soundEnabled: true,
   vibrationEnabled: true,

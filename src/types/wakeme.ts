@@ -25,6 +25,7 @@ export type AlertStatus =
   | 'dismissed';
 
 export interface UserPreferences {
+  theme: 'light' | 'dark';
   defaultAlertRadiusKm: number;
   soundEnabled: boolean;
   vibrationEnabled: boolean;

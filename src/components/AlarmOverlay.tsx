@@ -45,7 +45,7 @@ export const AlarmOverlay: React.FC<AlarmOverlayProps> = ({
         <div className="relative mb-6 flex h-32 w-32 items-center justify-center">
           <span className="animate-radar-ping absolute inset-0 rounded-full bg-white/30" />
           <span className="animate-radar-ping absolute inset-3 rounded-full bg-amber-300/35 [animation-delay:0.4s]" />
-          <div className="relative flex h-24 w-24 items-center justify-center rounded-full border-4 border-white/60 bg-[#05070b]/80 shadow-2xl">
+          <div className="relative flex h-24 w-24 items-center justify-center rounded-full border-4 border-white/60 bg-black/50 shadow-2xl">
             <BellRing className="h-11 w-11 animate-bounce text-amber-300" />
           </div>
         </div>
@@ -62,7 +62,7 @@ export const AlarmOverlay: React.FC<AlarmOverlayProps> = ({
 
         {isFallbackTrigger && (
           <p className="mt-3 max-w-xs text-xs leading-relaxed text-amber-100/90">
-            Signal dropped earlier — WakeMe computed arrival from your last speed and intermediate stops buffer.
+            Signal dropped earlier — WakeMe computed arrival from your last speed and stops buffer.
           </p>
         )}
       </div>

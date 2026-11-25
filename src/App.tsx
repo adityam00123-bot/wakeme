@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Compass, Home, Navigation, PlusCircle, Radio, Settings, User, WifiOff } from 'lucide-react';
+import {
+  Compass,
+  Home,
+  Moon,
+  Navigation,
+  Radio,
+  Search,
+  Settings,
+  Sun,
+  User,
+  WifiOff,
+} from 'lucide-react';
 import { AddDestinationScreen } from './components/AddDestinationScreen';
 import { AlarmOverlay } from './components/AlarmOverlay';
 import { AuthModal } from './components/AuthModal';
@@ -62,6 +73,16 @@ export function App() {
   liveStateRef.current = liveState;
   userRef.current = user;
 
+  // Apply Light / Dark theme class & meta theme-color
+  useEffect(() => {
+    const isDark = user.preferences.theme === 'dark';
+    document.documentElement.classList.toggle('dark', isDark);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      meta.setAttribute('content', isDark ? '#0A0D12' : '#F5F7FA');
+    }
+  }, [user.preferences.theme]);
+
   const appendLog = useCallback((type: TelemetryLogEntry['type'], message: string) => {
     const entry: TelemetryLogEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -85,6 +106,13 @@ export function App() {
     const next = { ...user, preferences: updatedPrefs };
     setUser(next);
     saveUserProfile(next);
+  };
+
+  const toggleThemeQuick = () => {
+    handleUpdatePreferences({
+      ...user.preferences,
+      theme: user.preferences.theme === 'dark' ? 'light' : 'dark',
+    });
   };
 
   const handleToggleFavourite = (id: string) => {
@@ -347,7 +375,7 @@ export function App() {
     setLiveState(initialLive);
     appendLog(
       'info',
-      `Journey armed: ${config.startName} to ${config.destination.destination_name} (Alert @ ${config.alertRadiusKm} km)`
+      `Trip armed: ${config.startName} to ${config.destination.destination_name} (Alert @ ${config.alertRadiusKm} km)`
     );
 
     if (config.mode === 'live_gps' && 'geolocation' in navigator) {
@@ -563,7 +591,7 @@ export function App() {
         completedRecord as unknown as Record<string, unknown>,
         user.preferences
       );
-      appendLog('info', `Journey ended (${finalStatus}) · Battery saved: ${savedPct}%`);
+      appendLog('info', `Trip ended (${finalStatus}) · Battery saved: ${savedPct}%`);
     }
 
     setActiveJourney(null);
@@ -634,57 +662,69 @@ export function App() {
 
   const navItems = [
     { id: 'home' as const, label: 'Home', icon: Home },
-    { id: 'add' as const, label: 'Add Stop', icon: PlusCircle },
-    { id: 'journey' as const, label: activeJourney ? 'Active' : 'Journey', icon: Compass },
-    { id: 'settings' as const, label: 'Telemetry', icon: Settings },
+    { id: 'add' as const, label: 'Search', icon: Search },
+    { id: 'journey' as const, label: activeJourney ? 'Active' : 'Trip', icon: Compass },
+    { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
+  const isDark = user.preferences.theme === 'dark';
+
   return (
-    <div className="min-h-dvh w-full bg-[#05070b] text-slate-100">
-      {/* Mobile-First App Frame (100% full screen on phones, clean 440px phone frame on desktop) */}
-      <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-[#070b14] md:border-x md:border-white/[0.08] md:shadow-2xl">
-        {/* Clean Mobile App Header */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/[0.07] bg-[#070b14]/92 px-4 py-3 backdrop-blur-xl">
+    <div className="min-h-dvh w-full bg-[#f5f7fa] text-slate-900 transition-colors duration-150 dark:bg-[#0a0d12] dark:text-slate-100">
+      <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-[#f5f7fa] md:border-x md:border-slate-200/80 md:shadow-xl dark:bg-[#0a0d12] dark:md:border-white/[0.08]">
+        {/* Clean Mobile Header (Brand + Quick Theme Toggle + Profile) */}
+        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200/80 bg-[#f5f7fa]/92 px-4 py-3 backdrop-blur-xl dark:border-white/[0.07] dark:bg-[#0a0d12]/92">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm dark:bg-blue-500">
               <Navigation className="h-4 w-4" />
             </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base font-extrabold tracking-tight text-white">WakeMe</span>
-                {liveState?.deadReckoningActive ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300">
-                    <WifiOff className="h-2.5 w-2.5" />
-                    Fallback
-                  </span>
-                ) : activeJourney ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
-                    <Radio className="h-2.5 w-2.5 animate-pulse" />
-                    Armed
-                  </span>
-                ) : null}
-              </div>
-              <p className="text-[11px] text-slate-400">Never Miss Your Destination</p>
+            <div className="flex items-center gap-2">
+              <span className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
+                WakeMe
+              </span>
+              {liveState?.deadReckoningActive ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">
+                  <WifiOff className="h-2.5 w-2.5" />
+                  Fallback
+                </span>
+              ) : activeJourney ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">
+                  <Radio className="h-2.5 w-2.5 animate-pulse" />
+                  Armed
+                </span>
+              ) : null}
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setAuthModalOpen(true)}
-            className="pressable flex items-center gap-1.5 rounded-full border border-white/10 bg-[#0e1524] px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400/40"
-          >
-            <User className="h-3.5 w-3.5 text-cyan-300" />
-            <span className="max-w-[84px] truncate">{user.name.split(' ')[0]}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleThemeQuick}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="pressable flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 hover:text-blue-600 dark:border-white/10 dark:bg-[#141923] dark:text-slate-200"
+            >
+              {isDark ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAuthModalOpen(true)}
+              aria-label="Open commuter account"
+              className="pressable flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-blue-500/40 dark:border-white/10 dark:bg-[#141923] dark:text-slate-200"
+            >
+              <User className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+              <span className="max-w-[72px] truncate">{user.name.split(' ')[0]}</span>
+            </button>
+          </div>
         </header>
 
-        {/* Scrollable Screen Content */}
+        {/* Main Screen Body */}
         <main className="flex-1 px-4 pb-24 pt-4">
           {tab === 'home' && (
             <HomeScreen
               destinations={destinations}
               hasActiveJourney={Boolean(activeJourney)}
-              onGoToAdd={() => setTab('add')}
+              onGoToSearch={() => setTab('add')}
               onStartWithDestination={(dest) => {
                 setSelectedDestination(dest);
                 setSelectedPresetRoute(null);
@@ -704,6 +744,7 @@ export function App() {
 
           {tab === 'add' && (
             <AddDestinationScreen
+              theme={user.preferences.theme}
               userId={user.user_id}
               onBack={() => setTab('home')}
               onSaveDestination={handleSaveNewDestination}
@@ -712,6 +753,7 @@ export function App() {
 
           {tab === 'journey' && (
             <JourneyScreen
+              theme={user.preferences.theme}
               destinations={destinations}
               preferences={user.preferences}
               selectedDestination={selectedDestination}
@@ -765,8 +807,8 @@ export function App() {
           )}
         </main>
 
-        {/* Fixed Mobile Bottom Navigation */}
-        <nav className="fixed bottom-0 left-1/2 z-40 w-full max-w-[440px] -translate-x-1/2 border-t border-white/[0.08] bg-[#070b14]/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl">
+        {/* Bottom Dock Navigation */}
+        <nav className="fixed bottom-0 left-1/2 z-40 w-full max-w-[440px] -translate-x-1/2 border-t border-slate-200/80 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-[#0a0d12]/95">
           <div className="grid grid-cols-4 gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -778,12 +820,12 @@ export function App() {
                   onClick={() => setTab(item.id)}
                   className={`pressable relative flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 py-1.5 ${
                     active
-                      ? 'bg-cyan-400/12 text-cyan-300'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400'
+                      : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                   }`}
                 >
                   {item.id === 'journey' && activeJourney && (
-                    <span className="absolute right-5 top-2 h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="absolute right-5 top-2 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                   )}
                   <Icon className={`h-5 w-5 ${active ? 'stroke-[2.3]' : 'stroke-[1.8]'}`} />
                   <span className="text-[11px] font-semibold">{item.label}</span>

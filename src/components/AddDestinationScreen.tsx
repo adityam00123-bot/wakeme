@@ -6,12 +6,14 @@ import { Destination, DestinationCategory, MumbaiLine } from '../types/wakeme';
 import { LiveMap } from './LiveMap';
 
 interface AddDestinationScreenProps {
+  theme: 'light' | 'dark';
   userId: string;
   onBack: () => void;
   onSaveDestination: (dest: Destination, startImmediately: boolean) => void;
 }
 
 export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
+  theme,
   userId,
   onBack,
   onSaveDestination,
@@ -24,7 +26,7 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
   const [subtitle, setSubtitle] = useState('');
   const [category, setCategory] = useState<DestinationCategory>('Station');
   const [line, setLine] = useState<MumbaiLine>('Express');
-  const [lat, setLat] = useState(18.5289); // Pune Junction default
+  const [lat, setLat] = useState(18.5289);
   const [lng, setLng] = useState(73.8744);
   const [favourite, setFavourite] = useState(true);
 
@@ -101,18 +103,22 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
             type="button"
             onClick={onBack}
             aria-label="Back to home"
-            className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#0e1524] text-slate-300 hover:text-white"
+            className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:text-slate-900 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300 dark:hover:text-white"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <h1 className="text-lg font-bold tracking-[-0.02em] text-white">Add destination</h1>
-            <p className="text-xs text-slate-400">Search any city/station or tap the map</p>
+            <h1 className="text-lg font-bold tracking-[-0.02em] text-slate-900 dark:text-white">
+              Search &amp; Add Stop
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Search any city/station or tap the map
+            </p>
           </div>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-[#0e1524] px-2.5 py-1 text-[11px] font-medium text-slate-300">
-          {!navigator.onLine ? <WifiOff className="h-3 w-3 text-amber-400" /> : null}
-          {navigator.onLine ? 'OSM + Offline' : 'Offline Stations'}
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:border-white/10 dark:bg-[#141923] dark:text-slate-300">
+          {!navigator.onLine ? <WifiOff className="h-3 w-3 text-amber-500" /> : null}
+          {navigator.onLine ? 'OSM + Offline' : 'Offline DB'}
         </span>
       </header>
 
@@ -124,26 +130,30 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search Pune, Surat, Goa, Borivali, Dadar…"
-          className="w-full rounded-2xl border border-white/10 bg-[#0e1524] py-3 pl-11 pr-10 text-base text-white placeholder-slate-400 outline-none focus:border-cyan-400/60 sm:text-sm"
+          className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-11 pr-10 text-base text-slate-900 placeholder-slate-400 outline-none focus:border-blue-500 sm:text-sm dark:border-white/10 dark:bg-[#141923] dark:text-white"
         />
-        {searching && <Loader2 className="absolute right-4 h-4 w-4 animate-spin text-cyan-400" />}
+        {searching && <Loader2 className="absolute right-4 h-4 w-4 animate-spin text-blue-500" />}
       </div>
 
       {/* Results List */}
       {results.length > 0 && (
-        <div className="clean-scroll max-h-40 divide-y divide-white/[0.06] overflow-y-auto rounded-2xl border border-white/[0.08] bg-[#0e1524]">
+        <div className="clean-scroll max-h-40 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:divide-white/[0.06] dark:border-white/[0.08] dark:bg-[#141923]">
           {results.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => handleSelectResult(item)}
-              className="pressable flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left hover:bg-white/[0.04]"
+              className="pressable flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-white">{item.name}</p>
-                <p className="truncate text-xs text-slate-400">{item.subtitle}</p>
+                <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
+                  {item.name}
+                </p>
+                <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                  {item.subtitle}
+                </p>
               </div>
-              <span className="shrink-0 rounded-md border border-white/10 bg-[#05070b] px-2 py-0.5 text-[11px] font-medium text-cyan-300">
+              <span className="shrink-0 rounded-md bg-[#edf1f7] px-2 py-0.5 text-[11px] font-semibold text-blue-700 dark:bg-[#1c2331] dark:text-blue-300">
                 {item.source === 'Offline Junction DB' ? 'Station' : 'OSM'}
               </span>
             </button>
@@ -151,8 +161,9 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
         </div>
       )}
 
-      {/* MapLibre OpenFreeMap Dark Interactive Pin Picker */}
+      {/* Map */}
       <LiveMap
+        theme={theme}
         centerLat={lat}
         centerLng={lng}
         destLat={lat}
@@ -166,19 +177,19 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
       />
 
       {/* Details Form */}
-      <div className="space-y-3.5 rounded-2xl border border-white/[0.08] bg-[#0e1524] p-4">
+      <div className="space-y-3.5 rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/[0.08] dark:bg-[#141923]">
         <div className="flex items-center justify-between">
-          <span className="font-mono-num inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+          <span className="font-mono-num inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400">
             <MapPin className="h-3.5 w-3.5" />
-            {lat.toFixed(5)}, {lng.toFixed(5)}
+            {lat.toFixed(4)}, {lng.toFixed(4)}
           </span>
           <button
             type="button"
             onClick={() => setFavourite((v) => !v)}
             className={`pressable inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${
               favourite
-                ? 'border-amber-400/40 bg-amber-500/15 text-amber-200'
-                : 'border-white/10 bg-[#05070b] text-slate-400'
+                ? 'border-amber-400/50 bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200'
+                : 'border-slate-200 bg-[#edf1f7] text-slate-500 dark:border-white/10 dark:bg-[#1c2331] dark:text-slate-400'
             }`}
           >
             <Star className={`h-3.5 w-3.5 ${favourite ? 'fill-amber-400 text-amber-400' : ''}`} />
@@ -187,23 +198,27 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
         </div>
 
         <div>
-          <label className="mb-1.5 block text-xs font-medium text-slate-300">Destination name</label>
+          <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+            Destination name
+          </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g., Pune Junction or Dadar Station"
-            className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3.5 py-2.5 text-base text-white outline-none focus:border-cyan-400/60 sm:text-sm"
+            className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-blue-500 sm:text-sm dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Category</label>
+            <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              Category
+            </label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value as DestinationCategory)}
-              className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
+              className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
             >
               <option value="Station">Station</option>
               <option value="Home">Home</option>
@@ -213,11 +228,13 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
             </select>
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Corridor</label>
+            <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              Corridor
+            </label>
             <select
               value={line}
               onChange={(e) => setLine(e.target.value as MumbaiLine)}
-              className="w-full rounded-xl border border-white/10 bg-[#05070b] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-400/60"
+              className="w-full rounded-xl border border-slate-200 bg-[#f5f7fa] px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-white/10 dark:bg-[#0a0d12] dark:text-white"
             >
               <option value="Express">Express Train</option>
               <option value="Bus">Intercity Bus</option>
@@ -233,15 +250,15 @@ export const AddDestinationScreen: React.FC<AddDestinationScreenProps> = ({
           <button
             type="button"
             onClick={() => handleSave(false)}
-            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/[0.06] py-3 text-xs font-bold text-white hover:bg-white/10"
+            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-[#edf1f7] py-3 text-xs font-bold text-slate-800 hover:bg-slate-200 dark:border-white/10 dark:bg-[#1c2331] dark:text-white"
           >
-            <Check className="h-4 w-4 text-cyan-300" />
+            <Check className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             Save Only
           </button>
           <button
             type="button"
             onClick={() => handleSave(true)}
-            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl bg-cyan-400 py-3 text-xs font-bold text-slate-950 hover:bg-cyan-300"
+            className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 py-3 text-xs font-bold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"
           >
             Save &amp; Start
           </button>

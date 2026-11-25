@@ -42,6 +42,7 @@ interface StationPin {
 }
 
 interface LiveMapProps {
+  theme: 'light' | 'dark';
   centerLat: number;
   centerLng: number;
   destLat?: number;
@@ -59,7 +60,11 @@ interface LiveMapProps {
   zoom?: number;
 }
 
-const OPENFREEMAP_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+function getStyleUrl(theme: 'light' | 'dark'): string {
+  return theme === 'dark'
+    ? 'https://tiles.openfreemap.org/styles/dark'
+    : 'https://tiles.openfreemap.org/styles/liberty';
+}
 
 function createCirclePolygon(lng: number, lat: number, radiusKm: number, points = 64): number[][] {
   const coords: number[][] = [];
@@ -74,6 +79,7 @@ function createCirclePolygon(lng: number, lat: number, radiusKm: number, points 
 }
 
 export const LiveMap: React.FC<LiveMapProps> = ({
+  theme,
   centerLat,
   centerLng,
   destLat,
@@ -87,7 +93,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   isAlerting = false,
   interactivePinMode = false,
   onMapClick,
-  className = 'h-60 w-full',
+  className = 'h-56 w-full',
   zoom = 11,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -95,10 +101,12 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const destMarkerRef = useRef<Marker | null>(null);
   const userMarkerRef = useRef<Marker | null>(null);
   const lastFittedKeyRef = useRef<string>('');
+  const appliedThemeRef = useRef<'light' | 'dark'>(theme);
   const onClickRef = useRef(onMapClick);
   onClickRef.current = onMapClick;
 
   const latestPropsRef = useRef({
+    theme,
     destLat,
     destLng,
     destName,
@@ -110,6 +118,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     isAlerting,
   });
   latestPropsRef.current = {
+    theme,
     destLat,
     destLng,
     destName,
@@ -124,9 +133,14 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const syncGeoJsonLayers = (map: MapLibreMap) => {
     if (!map.isStyleLoaded()) return;
     const p = latestPropsRef.current;
-    const accentColor = p.isAlerting ? '#ef4444' : p.isDeadReckoning ? '#f59e0b' : '#22d3ee';
+    const accentColor = p.isAlerting
+      ? '#dc2626'
+      : p.isDeadReckoning
+      ? '#d97706'
+      : p.theme === 'dark'
+      ? '#3b82f6'
+      : '#2563eb';
 
-    // Route Line + Stations GeoJSON
     const routeFeature: GeoCollection = {
       type: 'FeatureCollection',
       features:
@@ -152,7 +166,6 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           : [],
     };
 
-    // Alert Radius Circle GeoJSON
     const circleFeature: GeoCollection = {
       type: 'FeatureCollection',
       features:
@@ -187,7 +200,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         paint: {
           'line-color': accentColor,
           'line-width': 3.5,
-          'line-opacity': 0.85,
+          'line-opacity': 0.9,
         },
       });
       map.addLayer({
@@ -197,7 +210,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         filter: ['==', '$type', 'Point'],
         paint: {
           'circle-radius': 4,
-          'circle-color': '#05070b',
+          'circle-color': p.theme === 'dark' ? '#0a0d12' : '#ffffff',
           'circle-stroke-width': 2,
           'circle-stroke-color': accentColor,
         },
@@ -235,7 +248,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         paint: {
           'line-color': accentColor,
           'line-width': 2,
-          'line-opacity': 0.8,
+          'line-opacity': 0.85,
         },
       });
     }
@@ -254,7 +267,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
     const map = new MapLibreMap({
       container: containerRef.current,
-      style: OPENFREEMAP_DARK_STYLE,
+      style: getStyleUrl(theme),
       center: [centerLng, centerLat],
       zoom,
       attributionControl: false,
@@ -267,7 +280,6 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     });
 
     map.on('error', () => {
-      // Fallback empty dark vector style if offline before style loads
       if (!map.isStyleLoaded()) {
         try {
           map.setStyle({
@@ -277,7 +289,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({
               {
                 id: 'offline-bg',
                 type: 'background',
-                paint: { 'background-color': '#070b14' },
+                paint: {
+                  'background-color': latestPropsRef.current.theme === 'dark' ? '#0a0d12' : '#edf1f7',
+                },
               },
             ],
           });
@@ -310,6 +324,14 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Switch map style smoothly when Light/Dark theme toggles
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || appliedThemeRef.current === theme) return;
+    appliedThemeRef.current = theme;
+    map.setStyle(getStyleUrl(theme));
+  }, [theme]);
+
   // Update markers & GeoJSON layers on prop updates
   useEffect(() => {
     const map = mapRef.current;
@@ -317,13 +339,20 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
     syncGeoJsonLayers(map);
 
-    const destColor = isAlerting ? '#ef4444' : isDeadReckoning ? '#f59e0b' : '#22d3ee';
+    const destColor = isAlerting
+      ? '#dc2626'
+      : isDeadReckoning
+      ? '#d97706'
+      : theme === 'dark'
+      ? '#3b82f6'
+      : '#2563eb';
+
     if (typeof destLat === 'number' && typeof destLng === 'number') {
       if (!destMarkerRef.current) {
         const el = document.createElement('div');
         el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;">
-          <span style="position:absolute;inset:0;border-radius:9999px;background:${destColor};opacity:0.3;"></span>
-          <span style="width:13px;height:13px;border-radius:9999px;background:${destColor};border:2.5px solid #05070b;box-shadow:0 0 14px ${destColor};"></span>
+          <span style="position:absolute;inset:0;border-radius:9999px;background:${destColor};opacity:0.25;"></span>
+          <span style="width:14px;height:14px;border-radius:9999px;background:${destColor};border:2.5px solid #ffffff;box-shadow:0 2px 10px rgba(0,0,0,0.35);"></span>
         </div>`;
         destMarkerRef.current = new Marker({ element: el })
           .setLngLat([destLng, destLat])
@@ -332,23 +361,20 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         destMarkerRef.current.setLngLat([destLng, destLat]);
         const dot = destMarkerRef.current.getElement().querySelectorAll('span');
         if (dot[0]) (dot[0] as HTMLElement).style.background = destColor;
-        if (dot[1]) {
-          (dot[1] as HTMLElement).style.background = destColor;
-          (dot[1] as HTMLElement).style.boxShadow = `0 0 14px ${destColor}`;
-        }
+        if (dot[1]) (dot[1] as HTMLElement).style.background = destColor;
       }
     } else {
       destMarkerRef.current?.remove();
       destMarkerRef.current = null;
     }
 
-    const userColor = isDeadReckoning ? '#f59e0b' : '#10b981';
+    const userColor = isDeadReckoning ? '#d97706' : '#059669';
     if (typeof userLat === 'number' && typeof userLng === 'number') {
       if (!userMarkerRef.current) {
         const el = document.createElement('div');
-        el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;">
-          <span style="position:absolute;inset:0;border-radius:9999px;background:${userColor};opacity:0.32;"></span>
-          <span style="width:14px;height:14px;border-radius:9999px;background:${userColor};border:3px solid #ffffff;box-shadow:0 0 14px ${userColor};"></span>
+        el.innerHTML = `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:30px;height:30px;">
+          <span style="position:absolute;inset:0;border-radius:9999px;background:${userColor};opacity:0.28;"></span>
+          <span style="width:14px;height:14px;border-radius:9999px;background:${userColor};border:3px solid #ffffff;box-shadow:0 2px 10px rgba(0,0,0,0.35);"></span>
         </div>`;
         userMarkerRef.current = new Marker({ element: el })
           .setLngLat([userLng, userLat])
@@ -357,17 +383,13 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         userMarkerRef.current.setLngLat([userLng, userLat]);
         const dot = userMarkerRef.current.getElement().querySelectorAll('span');
         if (dot[0]) (dot[0] as HTMLElement).style.background = userColor;
-        if (dot[1]) {
-          (dot[1] as HTMLElement).style.background = userColor;
-          (dot[1] as HTMLElement).style.boxShadow = `0 0 14px ${userColor}`;
-        }
+        if (dot[1]) (dot[1] as HTMLElement).style.background = userColor;
       }
     } else {
       userMarkerRef.current?.remove();
       userMarkerRef.current = null;
     }
 
-    // Auto-fit route bounds once per journey or pan in pin-drop mode
     if (
       typeof userLat === 'number' &&
       typeof userLng === 'number' &&
@@ -388,6 +410,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       }
     }
   }, [
+    theme,
     destLat,
     destLng,
     destName,
@@ -419,27 +442,17 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     }
   };
 
-  const handleWestIndiaOverview = () => {
+  const handleOverview = () => {
     mapRef.current?.easeTo({ center: [73.3, 19.05], zoom: 7.4, duration: 500 });
   };
 
   return (
-    <div className={`relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#070b14] ${className}`}>
-      {/* Fallback Radar Grid underneath WebGL canvas */}
-      <div
-        className="pointer-events-none absolute inset-0 opacity-20"
-        style={{
-          backgroundImage:
-            'radial-gradient(circle at 50% 45%, rgba(34,211,238,0.16), transparent 60%), linear-gradient(to right, rgba(148,163,184,0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.12) 1px, transparent 1px)',
-          backgroundSize: '100% 100%, 28px 28px, 28px 28px',
-        }}
-      />
-
+    <div className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-[#edf1f7] dark:border-white/[0.08] dark:bg-[#141923] ${className}`}>
       <div ref={containerRef} className="relative z-10 h-full w-full" />
 
       {interactivePinMode && (
-        <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-cyan-400/30 bg-[#0b101c]/90 px-3 py-1 text-[11px] font-medium text-cyan-200 shadow-lg backdrop-blur">
-          Tap anywhere on map to pin stop
+        <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-full border border-slate-200 bg-white/92 px-3 py-1 text-[11px] font-semibold text-slate-800 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#141923]/90 dark:text-slate-100">
+          Tap map to move pin
         </div>
       )}
 
@@ -448,15 +461,15 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           type="button"
           onClick={handleFitBounds}
           aria-label="Focus route on map"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur hover:border-cyan-400/40 hover:text-cyan-300"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white/92 text-slate-700 shadow-sm backdrop-blur hover:text-blue-600 dark:border-white/10 dark:bg-[#141923]/90 dark:text-slate-200 dark:hover:text-blue-400"
         >
           <Crosshair className="h-4 w-4" />
         </button>
         <button
           type="button"
-          onClick={handleWestIndiaOverview}
+          onClick={handleOverview}
           aria-label="Corridor overview"
-          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#0b101c]/90 text-slate-200 shadow-lg backdrop-blur hover:border-cyan-400/40 hover:text-cyan-300"
+          className="pressable flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white/92 text-slate-700 shadow-sm backdrop-blur hover:text-blue-600 dark:border-white/10 dark:bg-[#141923]/90 dark:text-slate-200 dark:hover:text-blue-400"
         >
           <Maximize2 className="h-4 w-4" />
         </button>
