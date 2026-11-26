@@ -610,9 +610,9 @@ export const SettingsTelemetryScreen: React.FC<SettingsTelemetryScreenProps> = (
             </span>
           </div>
           <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
-            <span className="truncate text-slate-500 dark:text-slate-400">Wake Lock</span>
+            <span className="text-slate-500 dark:text-slate-400">Wake Lock</span>
             <span className={diag.wakeLockSupported ? 'shrink-0 font-bold text-emerald-600 dark:text-emerald-400' : 'shrink-0 text-slate-400'}>
-              {diag.wakeLockSupported ? 'Supported' : 'Fallback'}
+              {diag.wakeLockSupported ? 'Ready' : 'Fallback'}
             </span>
           </div>
           <div className="flex items-center justify-between gap-1.5 rounded-xl bg-[#f5f7fa] px-2.5 py-2 dark:bg-[#0a0d12]">
