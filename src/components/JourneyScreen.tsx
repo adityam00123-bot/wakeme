@@ -590,8 +590,13 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                         : `${liveState.etaMinutes}m`
                       : '--'}
                   </p>
-                  <p className="mt-0.5 text-[10px] text-slate-400">
-                    ±{Math.round(liveState.accuracyMeters)}m GPS
+                  <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                    {liveState.etaMinutes !== null
+                      ? `Arr ~${new Date(Date.now() + liveState.etaMinutes * 60_000).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}`
+                      : `±${Math.round(liveState.accuracyMeters)}m GPS`}
                   </p>
                 </>
               )}
@@ -685,8 +690,11 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
             {upcomingStops.map((stop, idx) => {
               const isLast = idx === upcomingStops.length - 1;
               const speedForEta =
-                (isDR ? liveState.drSnapshotSpeedKmh : liveState.speedKmh) ||
-                routeBaselineSpeedRefValue(activeJourney.route_id);
+                (isDR
+                  ? liveState.drSnapshotSpeedKmh
+                  : liveState.speedKmh >= 6
+                  ? liveState.speedKmh
+                  : null) || routeBaselineSpeedRefValue(activeJourney.route_id);
               const etaMin =
                 speedForEta > 3 ? Math.max(1, Math.round((stop.distFromUserKm / speedForEta) * 60)) : null;
 
@@ -822,27 +830,27 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
           </button>
         </div>
 
-        {/* Signal Loss, Speed & Alarm Demo Controls */}
-        <section className="rounded-2xl border border-blue-200/80 bg-white p-3.5 shadow-sm dark:border-blue-500/25 dark:bg-[#141923] dark:shadow-none">
-          <button
-            type="button"
-            onClick={() => setShowDemoControls((v) => !v)}
-            className="flex w-full items-center justify-between text-left"
-          >
-            <span className="inline-flex items-center gap-2 text-xs font-bold text-blue-700 dark:text-blue-300">
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              Signal loss, speed &amp; alarm controls
-            </span>
-            {showDemoControls ? (
-              <ChevronUp className="h-4 w-4 text-slate-400" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-slate-400" />
-            )}
-          </button>
+        {/* Signal Loss, Speed & Alarm Demo Controls (Simulator only; Live GPS automates drop/restore) */}
+        {activeJourney.mode === 'simulator' && (
+          <section className="rounded-2xl border border-blue-200/80 bg-white p-3.5 shadow-sm dark:border-blue-500/25 dark:bg-[#141923] dark:shadow-none">
+            <button
+              type="button"
+              onClick={() => setShowDemoControls((v) => !v)}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <span className="inline-flex items-center gap-2 text-xs font-bold text-blue-700 dark:text-blue-300">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Signal loss, speed &amp; alarm controls
+              </span>
+              {showDemoControls ? (
+                <ChevronUp className="h-4 w-4 text-slate-400" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-slate-400" />
+              )}
+            </button>
 
-          {showDemoControls && (
-            <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-3 dark:border-white/[0.07]">
-              {activeJourney.mode === 'simulator' && (
+            {showDemoControls && (
+              <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-3 dark:border-white/[0.07]">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                     Sim speed
@@ -864,30 +872,28 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                     ))}
                   </div>
                 </div>
-              )}
 
-              <div className={`grid gap-2 ${activeJourney.mode === 'simulator' ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                {!isDR ? (
-                  <button
-                    type="button"
-                    onClick={onSimulateSignalDrop}
-                    className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 py-2.5 text-xs font-bold text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-200"
-                  >
-                    <Zap className="h-3.5 w-3.5" />
-                    Drop GPS / Signal
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onRestoreSignal}
-                    className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 py-2.5 text-xs font-bold text-emerald-800 dark:border-emerald-400/35 dark:bg-emerald-500/20 dark:text-emerald-200"
-                  >
-                    <Radio className="h-3.5 w-3.5" />
-                    Restore GPS / Signal
-                  </button>
-                )}
+                <div className="grid grid-cols-2 gap-2">
+                  {!isDR ? (
+                    <button
+                      type="button"
+                      onClick={onSimulateSignalDrop}
+                      className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 py-2.5 text-xs font-bold text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-200"
+                    >
+                      <Zap className="h-3.5 w-3.5" />
+                      Drop GPS / Signal
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onRestoreSignal}
+                      className="pressable inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 py-2.5 text-xs font-bold text-emerald-800 dark:border-emerald-400/35 dark:bg-emerald-500/20 dark:text-emerald-200"
+                    >
+                      <Radio className="h-3.5 w-3.5" />
+                      Restore GPS / Signal
+                    </button>
+                  )}
 
-                {activeJourney.mode === 'simulator' && (
                   <button
                     type="button"
                     onClick={onJumpNearAlert}
@@ -896,20 +902,20 @@ export const JourneyScreen: React.FC<JourneyScreenProps> = ({
                     <Activity className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                     Skip Near Alert
                   </button>
-                )}
-              </div>
+                </div>
 
-              <button
-                type="button"
-                onClick={onForceTestAlarm}
-                className="pressable flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 py-2.5 text-xs font-bold text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/15 dark:text-rose-200"
-              >
-                <BellRing className="h-3.5 w-3.5" />
-                Ring Alarm, Sound &amp; Vibrate Now
-              </button>
-            </div>
-          )}
-        </section>
+                <button
+                  type="button"
+                  onClick={onForceTestAlarm}
+                  className="pressable flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 py-2.5 text-xs font-bold text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/15 dark:text-rose-200"
+                >
+                  <BellRing className="h-3.5 w-3.5" />
+                  Ring Alarm, Sound &amp; Vibrate Now
+                </button>
+              </div>
+            )}
+          </section>
+        )}
       </div>
     );
   }

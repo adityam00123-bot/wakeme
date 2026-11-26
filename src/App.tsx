@@ -66,6 +66,15 @@ import {
 
 type TabKey = 'home' | 'add' | 'journey' | 'settings';
 
+function computeLiveEtaMinutes(
+  distanceKm: number,
+  liveSpeedKmh: number,
+  baselineSpeedKmh: number
+): number {
+  const effectiveSpeed = liveSpeedKmh >= 6 ? liveSpeedKmh : Math.max(baselineSpeedKmh, 32);
+  return Math.max(1, Math.round((distanceKm / effectiveSpeed) * 60));
+}
+
 export function App() {
   const [tab, setTab] = useState<TabKey>('home');
   const [user, setUser] = useState<UserProfile>(() => loadUserProfile());
@@ -404,8 +413,11 @@ export function App() {
               speedSource: overrideFix?.speedSource || (j.mode === 'simulator' ? 'simulator' : 'haversine_delta'),
               accuracyMeters: overrideFix?.accuracyMeters ?? prev.accuracyMeters,
               headingDeg: overrideFix?.headingDeg ?? prev.headingDeg,
-              etaMinutes:
-                speedToUse > 3 ? Math.max(1, Math.round((exactDist / speedToUse) * 60)) : null,
+              etaMinutes: computeLiveEtaMinutes(
+                exactDist,
+                speedToUse,
+                routeBaselineSpeedRef.current
+              ),
               pollingZone: z.zone,
               pollIntervalSec: z.intervalSec,
               connectionHealth: 'RECALIBRATED',
@@ -552,7 +564,7 @@ export function App() {
       speedSource: config.mode === 'simulator' ? 'simulator' : 'haversine_delta',
       accuracyMeters: config.mode === 'simulator' ? 8 : 15,
       headingDeg: null,
-      etaMinutes: Math.max(1, Math.round((initialDist / baseSpeed) * 60)),
+      etaMinutes: computeLiveEtaMinutes(initialDist, baseSpeed, baseSpeed),
       pollingZone: zoneInfo.zone,
       pollIntervalSec: zoneInfo.intervalSec,
       connectionHealth: 'ONLINE_GPS',
@@ -619,20 +631,25 @@ export function App() {
             prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
           } else if (prevGpsFixRef.current) {
             const dtHours = (nowMs - prevGpsFixRef.current.timeMs) / 3_600_000;
-            if (dtHours > 0.00055) {
+            if (dtHours > 0.00083) {
               const movedKm = haversineDistanceKm(
                 prevGpsFixRef.current.lat,
                 prevGpsFixRef.current.lng,
                 lat,
                 lng
               );
-              const rawKmh = movedKm / dtHours;
-              if (rawKmh < 240) {
-                measuredSpeedKmh =
-                  curL.speedKmh > 0 ? curL.speedKmh * 0.45 + rawKmh * 0.55 : rawKmh;
-                spdSrc = 'haversine_delta';
+              if (movedKm >= 0.015) {
+                const rawKmh = movedKm / dtHours;
+                if (rawKmh < 240) {
+                  measuredSpeedKmh =
+                    curL.speedKmh > 0 ? curL.speedKmh * 0.45 + rawKmh * 0.55 : rawKmh;
+                  spdSrc = 'haversine_delta';
+                }
+                prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
+              } else {
+                measuredSpeedKmh = curL.speedKmh * 0.3 < 2 ? 0 : curL.speedKmh * 0.3;
+                prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
               }
-              prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
             }
           } else {
             prevGpsFixRef.current = { lat, lng, timeMs: nowMs };
@@ -688,10 +705,11 @@ export function App() {
                   speedSource: spdSrc,
                   accuracyMeters: accuracy,
                   headingDeg: pos.heading ?? prev.headingDeg,
-                  etaMinutes:
-                    measuredSpeedKmh > 3
-                      ? Math.max(1, Math.round((dist / measuredSpeedKmh) * 60))
-                      : null,
+                  etaMinutes: computeLiveEtaMinutes(
+                    dist,
+                    measuredSpeedKmh,
+                    routeBaselineSpeedRef.current
+                  ),
                   pollingZone: z.zone,
                   pollIntervalSec: z.intervalSec,
                   simProgress: snap.progress0to1,
